@@ -52,6 +52,7 @@ void Dashboard::updateStats(uint64_t frameCount, double deltaTime, const std::ve
     m_deltaTime = deltaTime;
     m_controllerStates = states;
     m_lastUpdateTime = TimingUtils::getPerformanceCounter();
+    m_screen.Post(ftxui::Event::Custom);
 }
 
 void Dashboard::setStatusMessage(const std::string& message) {
