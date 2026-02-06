@@ -25,6 +25,7 @@ public:
     
     // Set status messages
     void setStatusMessage(const std::string& message);
+    void setViGEmAvailable(bool available);
     
 private:
     void initializeUI();
@@ -47,6 +48,7 @@ private:
     double m_deltaTime;
     std::vector<ControllerState> m_controllerStates;
     std::string m_statusMessage;
+    bool m_vigemAvailable = false;
     
     // Timing
     uint64_t m_lastUpdateTime;
