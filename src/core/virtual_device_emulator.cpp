@@ -3,10 +3,15 @@
 
 #include <thread>
 #include <sstream>
+#include <iostream>
+#include <iomanip>
 
 // Include ViGEmBus headers
 extern "C" {
+#pragma warning(push)
+#pragma warning(disable: 4828)
 #include "ViGEmClient.h"
+#pragma warning(pop)
 }
 
 VirtualDeviceEmulator::VirtualDeviceEmulator() 
@@ -29,13 +34,15 @@ bool VirtualDeviceEmulator::initialize() {
     if (!initializeInputInjection()) {
         return false;
     }
+
+    m_initialized = true;
     
     if (!initializeVirtualDevices()) {
+        m_initialized = false;
         return false;
     }
     
     m_running = true;
-    m_initialized = true;
     
     // Start injection thread with high priority
     m_injectionThread = std::make_unique<std::thread>([this]() {
@@ -83,7 +90,7 @@ void VirtualDeviceEmulator::shutdown() {
     {
         std::lock_guard<std::mutex> lock(m_devicesMutex);
         for (auto& device : m_virtualDevices) {
-            destroyVirtualDevice(device.id);
+            destroyVirtualDeviceInternal(device);
         }
         m_virtualDevices.clear();
     }
@@ -183,21 +190,7 @@ bool VirtualDeviceEmulator::destroyVirtualDevice(int deviceId) {
                           });
     
     if (it != m_virtualDevices.end()) {
-        // Remove the target from ViGEmBus
-        if (it->target) {
-            auto client = static_cast<PVIGEM_CLIENT>(m_vigemClient);
-            auto target = static_cast<PVIGEM_TARGET>(it->target);
-            if (it->type == TranslatedState::TARGET_XINPUT) {
-                vigem_target_x360_unregister_notification(target);
-                vigem_target_remove(client, target);
-                vigem_target_free(target);
-            } else {
-                vigem_target_ds4_unregister_notification(target);
-                vigem_target_remove(client, target);
-                vigem_target_free(target);
-            }
-        }
-        
+        destroyVirtualDeviceInternal(*it);
         m_virtualDevices.erase(it);
         
         // Call callback if set
@@ -209,6 +202,24 @@ bool VirtualDeviceEmulator::destroyVirtualDevice(int deviceId) {
     }
     
     return false;
+}
+
+void VirtualDeviceEmulator::destroyVirtualDeviceInternal(VirtualDevice& device) {
+    if (device.target && m_vigemClient) {
+        PVIGEM_CLIENT client = reinterpret_cast<PVIGEM_CLIENT>(m_vigemClient);
+        PVIGEM_TARGET target = reinterpret_cast<PVIGEM_TARGET>(device.target);
+        
+        if (device.type == TranslatedState::TARGET_XINPUT) {
+            vigem_target_x360_unregister_notification(target);
+            vigem_target_remove(client, target);
+            vigem_target_free(target);
+        } else {
+            vigem_target_ds4_unregister_notification(target);
+            vigem_target_remove(client, target);
+            vigem_target_free(target);
+        }
+        device.target = nullptr;
+    }
 }
 
 int VirtualDeviceEmulator::getVirtualDeviceCount() const {
@@ -234,16 +245,24 @@ bool VirtualDeviceEmulator::initializeInputInjection() {
     // Initialize ViGEmBus client
     auto client = vigem_alloc();
     if (!client) {
+        m_lastError = "vigem_alloc failed (Memory/DLL issue).";
+        Logger::error("VirtualDeviceEmulator: " + m_lastError);
         return false;
     }
     m_vigemClient = static_cast<void*>(client);
 
     VIGEM_ERROR vigemError = vigem_connect(client);
     if (!VIGEM_SUCCESS(vigemError)) {
+        std::stringstream ss;
+        ss << "vigem_connect failed (Error 0x" << std::hex << vigemError << std::dec << "). Driver missing?";
+        m_lastError = ss.str();
+        Logger::error("VirtualDeviceEmulator: " + m_lastError);
         vigem_free(client);
         m_vigemClient = nullptr;
         return false;
     }
+
+    Logger::log("VirtualDeviceEmulator: Connected to ViGEmBus driver successfully.");
 
     return true;
 }
@@ -261,15 +280,22 @@ bool VirtualDeviceEmulator::createVirtualXInputDevice(int userId) {
 
     // Create a new Xbox 360 controller target
     PVIGEM_TARGET x360Target = vigem_target_x360_alloc();
+    if (!x360Target) {
+        m_lastError = "vigem_target_x360_alloc failed (Out of memory).";
+        return false;
+    }
+
     VIGEM_ERROR error = vigem_target_add(static_cast<PVIGEM_CLIENT>(m_vigemClient), x360Target);
-    
     if (!VIGEM_SUCCESS(error)) {
+        std::stringstream ss;
+        ss << "vigem_target_add failed (Error 0x" << std::hex << error << std::dec << ")";
+        m_lastError = ss.str();
+        Logger::error("VirtualDeviceEmulator: " + m_lastError);
         vigem_target_free(x360Target);
         return false;
     }
 
     // Store the target in our device mapping for this userId
-    std::lock_guard<std::mutex> lock(m_devicesMutex);
     VirtualDevice newDevice;
     newDevice.id = userId; // Use userId as ID for simplicity
     newDevice.type = TranslatedState::TARGET_XINPUT;
@@ -290,15 +316,21 @@ bool VirtualDeviceEmulator::createVirtualDInputDevice(int userId) {
 
     // Create a new DualShock 4 controller target
     PVIGEM_TARGET ds4Target = vigem_target_ds4_alloc();
+    if (!ds4Target) {
+        m_lastError = "vigem_target_ds4_alloc failed (Out of memory).";
+        return false;
+    }
+
     VIGEM_ERROR error = vigem_target_add(static_cast<PVIGEM_CLIENT>(m_vigemClient), ds4Target);
-    
     if (!VIGEM_SUCCESS(error)) {
+        std::stringstream ss;
+        ss << "vigem_target_add failed (Error 0x" << std::hex << error << std::dec << ")";
+        m_lastError = ss.str();
         vigem_target_free(ds4Target);
         return false;
     }
 
     // Store the target in our device mapping for this userId
-    std::lock_guard<std::mutex> lock(m_devicesMutex);
     VirtualDevice newDevice;
     newDevice.id = userId; // Use userId as ID for simplicity
     newDevice.type = TranslatedState::TARGET_DINPUT;
