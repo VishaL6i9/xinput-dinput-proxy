@@ -35,8 +35,10 @@ int main() {
     }
 
     if (!virtualDeviceEmulator->initialize()) {
-        std::cerr << "Failed to initialize virtual device emulator" << std::endl;
-        return -1;
+        std::cerr << "WARNING: Failed to initialize virtual device emulator." << std::endl;
+        std::cerr << "Virtual devices will not be created, but you can still verify controller detection." << std::endl;
+        std::cerr << "Make sure ViGEmBus driver is installed." << std::endl;
+        // return -1; // Don't exit, allow testing inputs
     }
 
     std::cout << "Initialization successful!" << std::endl;
