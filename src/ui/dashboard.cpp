@@ -8,7 +8,7 @@ Dashboard::Dashboard()
     : m_running(false), 
       m_frameCount(0), 
       m_deltaTime(0.0), 
-      m_statusMessage("Initializing..."),
+      m_statusMessage("Active"),
       m_lastUpdateTime(0),
       m_screen(ftxui::ScreenInteractive::Fullscreen()) {
 }
@@ -32,18 +32,9 @@ void Dashboard::run() {
     auto renderer = ftxui::Renderer([&]() {
         return renderMainScreen();
     });
-
-    // Handle events
-    auto component = ftxui::CatchEvent(renderer, [&](ftxui::Event event) {
-        if (event == ftxui::Event::Character('q') || event == ftxui::Event::Escape) {
-            m_screen.ExitLoopClosure()();
-            return true;
-        }
-        return false;
-    });
     
     // Main UI loop
-    m_screen.Loop(component);
+    m_screen.Loop(renderer);
 }
 
 void Dashboard::stop() {
@@ -97,7 +88,7 @@ ftxui::Element Dashboard::renderMainScreen() {
             renderStatusPanel() | ftxui::flex,
         }),
         ftxui::separator(),
-        ftxui::text("Press 'q' to quit") | ftxui::center
+        ftxui::text("Press Ctrl+C to quit") | ftxui::center
     });
 }
 
@@ -112,7 +103,15 @@ ftxui::Element Dashboard::renderControllersPanel() {
     children.push_back(ftxui::separator());
     
     for (const auto& state : m_controllerStates) {
-        std::string type = (state.userId >= 0) ? "XInput (" + std::to_string(state.userId) + ")" : "HID Input";
+        std::string type;
+        if (state.userId >= 0) {
+            type = "XInput (" + std::to_string(state.userId) + ")";
+        } else {
+            // Convert wide string product name to narrow string for FTXUI
+            std::string productName(state.productName.begin(), state.productName.end());
+            type = productName.empty() ? "HID Input" : productName;
+        }
+        
         std::string status = state.isConnected ? "Connected" : "Disconnected";
         
         std::stringstream info;
