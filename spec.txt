@@ -1,0 +1,146 @@
+## Updated Spec Plan (Performance‑Oriented) - 2026 Roadmap for Windows 11
+
+### Objective
+Develop a high-performance Windows 11 application in **C++** that translates controller input between **XInput ↔ DirectInput** in real time. Implement virtual device emulation using user-mode solutions leveraging Windows 11's Input Injection API and GameInput API to avoid kernel-mode driver requirements. Include a **performance-optimized text‑based dashboard** using modern TUI library.
+
+---
+
+### Core Features
+- **High-Performance Input Capture**
+  - Poll Xbox controllers via **XInput** with optimized polling frequency (1000Hz+ if possible).
+  - Poll DualSense/other controllers via **Windows GameInput API** or **HID API** (Windows.Devices.HumanInterfaceDevice).
+  - Maintain sub‑millisecond polling loop using **QueryPerformanceCounter/QueryPerformanceFrequency** for precise timing.
+
+- **Efficient Translation Layer**
+  - Map button/axis states between XInput and DirectInput layouts with minimal processing overhead.
+  - Handle trigger differences (combined vs separate) with optimized algorithms.
+  - Translate rumble feedback where possible with low-latency processing.
+
+- **User-Mode Virtual Device Emulation** *(Windows 11 Optimized)*
+  - Utilize **Windows Input Injection API** for creating virtual gamepad inputs (requires proper capabilities in app manifest).
+  - Implement device masking using **HidHide** (successor to HIDGuardian) to hide physical devices.
+  - Alternative: Investigate **Xb2XInput** approach for user-mode translation without kernel drivers.
+
+- **Performance-Optimized Text‑Based Dashboard**
+  - Built with **FTXUI** (modern C++ TUI library) for efficient rendering.
+  - Panels for:
+    - Connected controllers with real-time status
+    - Emulated device identity
+    - Current mappings with live feedback
+    - Latency measurements and performance metrics
+  - Configurable profiles via text menus/config files with hot-swapping capability.
+
+---
+
+### Technical Stack *(Windows 11 Optimized for 2026)*
+- **Language**: C++20 with performance-focused features
+- **Build System**: CMake with MSVC optimization flags (-O2 or -Ox for performance)
+- **Threading**: Dedicated high-priority threads for input polling (THREAD_PRIORITY_TIME_CRITICAL or THREAD_PRIORITY_HIGHEST)
+- **Timing**: QueryPerformanceCounter/QueryPerformanceFrequency for sub-millisecond precision
+- **Driver Layer**: Windows GameInput API + Input Injection API (user-mode only)
+- **UI Layer**: FTXUI for efficient terminal UI rendering
+- **Power Management**: High-performance power profile awareness
+- **Testing**: Legacy DirectInput games + modern XInput games with latency measurement tools
+
+---
+
+### Updated Development Roadmap *(Windows 11 Performance Focused)*
+
+**Phase 1: Windows 11 Environment & Research (Week 1)**
+- Set up development environment optimized for Windows 11 (Visual Studio 2022 with latest Windows SDK)
+- Research Windows 11 GameInput API and Input Injection API capabilities
+- Configure project for high-performance compilation and threading
+- Study Windows 11 power management and timer precision characteristics
+
+**Phase 2: High-Performance Input Capture (Week 2-3)**
+- Implement XInput polling with high-resolution timing (QueryPerformanceCounter)
+- Create dedicated high-priority thread for input polling (THREAD_PRIORITY_HIGHEST)
+- Implement DirectInput/GameInput polling for DualSense and other controllers
+- Add basic latency measurement and logging
+- Optimize polling frequency for best performance/accuracy balance
+
+**Phase 3: Efficient Translation Layer (Week 4-5)**
+- Implement optimized button/axis mapping with minimal CPU overhead
+- Add SOCD (Simultaneous Opposing Cardinal Directions) cleaning
+- Implement input debouncing with configurable intervals
+- Add trigger differentiation handling (combined vs separate)
+- Performance profiling and optimization of translation algorithms
+
+**Phase 4: User-Mode Virtual Device Creation (Week 6-7)**
+- Implement Windows Input Injection API for virtual gamepad creation
+- Configure app manifest with required capabilities for input injection
+- Test compatibility with various games and applications
+- Implement fallback mechanisms if Input Injection isn't available
+
+**Phase 5: Device Masking & Integration (Week 8)**
+- Integrate HidHide for masking physical devices
+- Implement proper device enumeration and filtering
+- Handle multiple controller instances with unique identification
+- Add hot-plug detection and dynamic reconfiguration
+
+**Phase 6: Performance Dashboard (Week 9)**
+- Build FTXUI-based performance dashboard
+- Display real-time latency measurements
+- Show controller status and mapping effectiveness
+- Add performance metrics (polling frequency, CPU usage, etc.)
+
+**Phase 7: Windows 11 Optimization & Tuning (Week 10-11)**
+- Fine-tune thread priorities and scheduling for real-time performance
+- Optimize for Windows 11 power management profiles
+- Implement adaptive polling based on system load
+- Conduct latency testing with various games and scenarios
+
+**Phase 8: Advanced Features & Final Optimization (Week 12+)**
+- Add rumble translation with minimal latency impact
+- Implement profile system for per-game mappings with automatic switching
+- Add motion sensor passthrough if available
+- Comprehensive performance optimization and latency reduction
+- Windows 11 Store packaging consideration (optional)
+
+---
+
+### Windows 11 Performance Optimization Strategies
+
+**High Priority Optimizations:**
+- **Thread Priority**: Use THREAD_PRIORITY_HIGHEST or THREAD_PRIORITY_TIME_CRITICAL for input polling threads
+- **Timer Precision**: Use QueryPerformanceCounter/QueryPerformanceFrequency instead of multimedia timers for highest precision
+- **Memory Allocation**: Minimize dynamic allocations in the input processing loop; use pre-allocated buffers
+- **CPU Affinity**: Pin critical threads to specific CPU cores to reduce context switching overhead
+
+**Medium Priority Optimizations:**
+- **Power Profile**: Detect and recommend high-performance power plan for optimal input handling
+- **Compiler Optimizations**: Use profile-guided optimization (PGO) and link-time code generation (LTCG)
+- **Cache Efficiency**: Optimize data structures for cache-friendly access patterns
+- **Batch Processing**: Process multiple input events in batches to reduce system call overhead
+
+**Low Priority Optimizations:**
+- **NUMA Awareness**: On multi-socket systems, bind threads to appropriate NUMA nodes
+- **Interrupt Moderation**: Configure network and storage devices to reduce interrupt interference
+- **System Tracing**: Use Windows Performance Toolkit to identify bottlenecks
+
+---
+
+### Updated Risks & Mitigation Strategies
+
+**High Priority Risks:**
+- **Input Injection Limitations**: Windows 11 Input Injection API may have restrictions. Mitigation: Implement fallback to alternative user-mode approaches like Xb2XInput concepts.
+- **Performance in User-Mode**: Achieving sub-millisecond latency without kernel drivers. Mitigation: Use high-priority threads, optimized algorithms, and precise timing APIs.
+- **Game Compatibility**: Some games may not recognize user-mode emulated devices. Mitigation: Extensive testing with popular titles and fallback options.
+
+**Medium Priority Risks:**
+- **Windows Updates**: Future Windows updates may affect Input Injection API. Mitigation: Regular testing and maintain alternative approaches.
+- **Power Management**: Windows 11 power saving features may impact polling precision. Mitigation: Implement power profile detection and recommendations.
+- **Multi-Threading Complexity**: Managing multiple high-priority threads safely. Mitigation: Use lock-free queues and atomic operations where possible.
+
+**Low Priority Risks:**
+- **App Store Requirements**: If distributed through Microsoft Store, additional requirements may apply. Mitigation: Design with Store compliance in mind from the start.
+
+---
+
+### Key 2026 Windows 11 Technology Landscape Notes
+- **GameInput API**: Modern unified API for handling various input devices including gamepads, flight sticks, etc.
+- **Input Injection API**: Allows user-mode applications to simulate input events system-wide
+- **Timer Precision**: Windows 11 maintains ~15.6ms base timer resolution but QueryPerformanceCounter offers microsecond precision
+- **Thread Priorities**: Windows 11 supports TIME_CRITICAL and HIGHEST thread priorities for real-time applications
+- **Driver Restrictions**: Increasing security measures make kernel-mode drivers more difficult to deploy
+- **Performance Focus**: Microsoft's 2026 roadmap emphasizes gaming performance improvements in Windows 11
