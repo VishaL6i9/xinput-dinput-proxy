@@ -4,6 +4,7 @@
 #include <thread>
 #include <algorithm>
 #include <sstream>
+#include <iostream>
 #include <objbase.h>
 #include <windows.h>
 #include <hidsdi.h>
@@ -22,15 +23,20 @@ InputCapture::~InputCapture() {
 
 bool InputCapture::initialize() {
     if (!initializeXInput()) {
+        std::cerr << "InputCapture: initializeXInput failed" << std::endl;
         return false;
     }
     
     if (!initializeHID()) {
+        std::cerr << "InputCapture: initializeHID failed" << std::endl;
         return false;
     }
+
+    std::cout << "InputCapture: Initialized with " << m_controllerStates.size() << " controller slots." << std::endl;
     
     // Start polling thread with high priority
     m_running = true;
+    /*
     m_pollingThread = std::make_unique<std::thread>([this]() {
         // Set thread priority to highest for real-time input processing
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
@@ -41,6 +47,7 @@ bool InputCapture::initialize() {
             std::this_thread::sleep_for(std::chrono::microseconds(100));
         }
     });
+    */
     
     return true;
 }
@@ -79,9 +86,10 @@ bool InputCapture::initializeXInput() {
     // Test XInput availability by querying the first controller
     XINPUT_STATE state;
     DWORD result = XInputGetState(0, &state);
-    
+
     // Even if no controller is connected, XInput is available if we don't get ERROR_DEVICE_NOT_CONNECTED
     if (result != ERROR_SUCCESS && result != ERROR_DEVICE_NOT_CONNECTED) {
+        std::cerr << "InputCapture: XInput not available. Error code: " << result << std::endl;
         return false;
     }
     
@@ -93,7 +101,6 @@ bool InputCapture::initializeXInput() {
         ControllerState ctrlState{};
         ctrlState.userId = static_cast<int>(i);
         ctrlState.xinputState = initialState;
-        ctrlState.xinputState = initialState;
         ctrlState.isConnected = (res == ERROR_SUCCESS);
         ctrlState.lastError = res;
         ctrlState.timestamp = TimingUtils::getPerformanceCounter();
@@ -104,6 +111,7 @@ bool InputCapture::initializeXInput() {
         }
     }
     
+    std::cout << "InputCapture: XInput initialized." << std::endl;
     return true;
 }
 
@@ -152,6 +160,7 @@ bool InputCapture::initializeHID() {
                 if (!found) {
                     // Add new controller state for this HID device
                     ControllerState newState{};
+                    newState.userId = -1; // HID device
                     newState.devicePath = deviceDetailData->DevicePath;
                     newState.isConnected = true;
                     newState.timestamp = TimingUtils::getPerformanceCounter();
@@ -163,13 +172,26 @@ bool InputCapture::initializeHID() {
                         FILE_SHARE_READ | FILE_SHARE_WRITE,
                         nullptr,
                         OPEN_EXISTING,
-                        0,
+                        FILE_FLAG_OVERLAPPED, // Use Overlapped I/O for non-blocking reads
                         nullptr
                     );
                     
                     if (deviceHandle != INVALID_HANDLE_VALUE) {
                         newState.hidHandle = deviceHandle;
                         newState.isConnected = true;
+                        
+                        // Initialize Overlapped structure
+                        memset(&newState.overlapped, 0, sizeof(OVERLAPPED));
+                        newState.overlapped.hEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+                        newState.isReadPending = false;
+                        
+                        // Get Product Name
+                        wchar_t productBuffer[128];
+                        if (HidD_GetProductString(deviceHandle, productBuffer, sizeof(productBuffer))) {
+                            newState.productName = productBuffer;
+                        } else {
+                            newState.productName = L"Unknown HID Device";
+                        }
                         
                         // Get Preparsed Data
                         PHIDP_PREPARSED_DATA preparsedData;
@@ -190,12 +212,26 @@ bool InputCapture::initializeHID() {
                                  newState.valueCaps.resize(capsLength);
                                  HidP_GetValueCaps(HidP_Input, newState.valueCaps.data(), &capsLength, preparsedData);
                              }
+                             
+                             // Filter for Gamepads/Joysticks only
+                             // Usage Page 0x01 (Generic Desktop), Usage 0x04 (Joystick) or 0x05 (Gamepad)
+                             if (newState.caps.UsagePage == 0x01 && (newState.caps.Usage == 0x04 || newState.caps.Usage == 0x05)) {
+                                 m_controllerStates.push_back(newState);
+                             } else {
+                                 // Close handle if not a relevant device
+                                 if (newState.overlapped.hEvent) CloseHandle(newState.overlapped.hEvent);
+                                 CloseHandle(newState.hidHandle);
+                                 if (newState.preparsedData) HidD_FreePreparsedData(newState.preparsedData);
+                             }
+                        } else {
+                            // Failed to get preparsed data
+                             if (newState.overlapped.hEvent) CloseHandle(newState.overlapped.hEvent);
+                             CloseHandle(newState.hidHandle);
                         }
                     } else {
-                        newState.isConnected = false;
+                        // Failed to open device
+                        // newState.isConnected = false;
                     }
-                    
-                    m_controllerStates.push_back(newState);
                 }
             }
         }
@@ -219,8 +255,6 @@ void InputCapture::pollXInputControllers() {
             if (i < m_controllerStates.size()) {
                 m_controllerStates[i].xinputState = state;
                 m_controllerStates[i].xinputPacketNumber = state.dwPacketNumber;
-                m_controllerStates[i].xinputState = state;
-                m_controllerStates[i].xinputPacketNumber = state.dwPacketNumber;
                 m_controllerStates[i].isConnected = (result == ERROR_SUCCESS);
                 m_controllerStates[i].lastError = result;
                 m_controllerStates[i].timestamp = TimingUtils::getPerformanceCounter();
@@ -233,28 +267,56 @@ void InputCapture::pollHIDControllers() {
     std::lock_guard<std::mutex> lock(m_statesMutex);
     
     for (auto& state : m_controllerStates) {
-        if (state.hidHandle != INVALID_HANDLE_VALUE && state.hidHandle != nullptr) {
-            // Prepare buffer for HID input report
-            BYTE buffer[256];
-            ULONG bytesRead = 0;
+        if (state.hidHandle != INVALID_HANDLE_VALUE && state.hidHandle != nullptr && state.userId < 0) { // Only poll HID, not pure XInput
             
-            // Try to read the input report
-            BOOL success = ReadFile(state.hidHandle, buffer, sizeof(buffer), reinterpret_cast<LPDWORD>(&bytesRead), nullptr);
-            
-            if (success && bytesRead > 0) {
-                state.isConnected = true;
-                state.timestamp = TimingUtils::getPerformanceCounter();
+            // If no read is pending, start one
+            if (!state.isReadPending) {
+                // Reset event
+                ResetEvent(state.overlapped.hEvent);
                 
-                // Parse the HID report properly using HidP APIs
-                parseHIDReport(state, reinterpret_cast<PCHAR>(buffer), bytesRead);
+                DWORD bytesRead = 0;
+                BOOL success = ReadFile(state.hidHandle, state.inputBuffer, sizeof(state.inputBuffer), &bytesRead, &state.overlapped);
+                
+                if (success) {
+                    // Immediate success (cached data?)
+                    state.isConnected = true;
+                    state.timestamp = TimingUtils::getPerformanceCounter();
+                    parseHIDReport(state, reinterpret_cast<PCHAR>(state.inputBuffer), bytesRead);
+                } else {
+                    DWORD error = GetLastError();
+                    if (error == ERROR_IO_PENDING) {
+                        state.isReadPending = true;
+                    } else {
+                        // Read failed
+                        // Check availability or ignore
+                        if (error == ERROR_DEVICE_NOT_CONNECTED) {
+                             state.isConnected = false;
+                             state.lastError = error;
+                        }
+                    }
+                }
             } else {
-                // Check if device is still connected by trying to get attributes
-                HIDD_ATTRIBUTES attributes;
-                attributes.Size = sizeof(HIDD_ATTRIBUTES);
-                if (!HidD_GetAttributes(state.hidHandle, &attributes)) {
-                    state.isConnected = false;
-                    CloseHandle(state.hidHandle);
-                    state.hidHandle = INVALID_HANDLE_VALUE;
+                // Read IS pending, check if it completed
+                DWORD bytesTransferred = 0;
+                if (GetOverlappedResult(state.hidHandle, &state.overlapped, &bytesTransferred, FALSE)) {
+                    // Completed!
+                    state.isReadPending = false;
+                    state.isConnected = true;
+                    state.timestamp = TimingUtils::getPerformanceCounter();
+                    
+                    if (bytesTransferred > 0) {
+                        parseHIDReport(state, reinterpret_cast<PCHAR>(state.inputBuffer), bytesTransferred);
+                    }
+                } else {
+                    // Not done or error
+                    DWORD error = GetLastError();
+                    if (error != ERROR_IO_INCOMPLETE) {
+                        // Fatal error or disconnected
+                        state.isReadPending = false;
+                        if (error == ERROR_DEVICE_NOT_CONNECTED) {
+                            state.isConnected = false;
+                        }
+                    }
                 }
             }
         }
