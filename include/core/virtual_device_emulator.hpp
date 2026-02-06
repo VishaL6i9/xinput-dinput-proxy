@@ -9,6 +9,10 @@
 
 #include "core/translation_layer.hpp"
 
+// Forward declaration for ViGEmBus
+// Use void* to avoid including ViGEm headers or getting into typedef conflicts
+// The implementation file will cast these to the real types
+
 class VirtualDeviceEmulator {
 public:
     VirtualDeviceEmulator();
@@ -55,13 +59,14 @@ private:
         int userId;
         bool connected;
         uint64_t lastUpdate;
+        void* target;  // ViGEmBus target handle (PVIGEM_TARGET)
     };
     
     mutable std::mutex m_devicesMutex;
     std::vector<VirtualDevice> m_virtualDevices;
     
-    // Input injection components (Windows 11 API)
-    void* m_inputInjector;  // Placeholder for InputInjector object
+    // ViGEmBus components
+    void* m_vigemClient;  // ViGEmBus client handle (PVIGEM_CLIENT)
     
     // Configuration
     bool m_rumbleEnabled;

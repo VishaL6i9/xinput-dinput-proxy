@@ -4,10 +4,15 @@
 #include <thread>
 #include <sstream>
 
+// Include ViGEmBus headers
+extern "C" {
+#include "ViGEmClient.h"
+}
+
 VirtualDeviceEmulator::VirtualDeviceEmulator() 
     : m_initialized(false), 
       m_running(false),
-      m_inputInjector(nullptr),
+      m_vigemClient(nullptr),
       m_rumbleEnabled(true),
       m_rumbleIntensity(1.0f) {
 }
@@ -67,13 +72,13 @@ void VirtualDeviceEmulator::shutdown() {
     if (!m_initialized) {
         return;
     }
-    
+
     m_running = false;
-    
+
     if (m_injectionThread && m_injectionThread->joinable()) {
         m_injectionThread->join();
     }
-    
+
     // Destroy all virtual devices
     {
         std::lock_guard<std::mutex> lock(m_devicesMutex);
@@ -82,7 +87,15 @@ void VirtualDeviceEmulator::shutdown() {
         }
         m_virtualDevices.clear();
     }
-    
+
+    // Disconnect from ViGEmBus
+    if (m_vigemClient) {
+        auto client = static_cast<PVIGEM_CLIENT>(m_vigemClient);
+        vigem_disconnect(client);
+        vigem_free(client);
+        m_vigemClient = nullptr;
+    }
+
     m_initialized = false;
 }
 
@@ -91,10 +104,23 @@ bool VirtualDeviceEmulator::sendInput(const std::vector<TranslatedState>& transl
         return false;
     }
     
-    // Add states to injection queue
-    {
-        std::lock_guard<std::mutex> lock(m_injectionQueueMutex);
-        m_injectionQueue.insert(m_injectionQueue.end(), translatedStates.begin(), translatedStates.end());
+    // Process each translated state immediately if possible, otherwise queue
+    for (const auto& state : translatedStates) {
+        if (state.targetType == TranslatedState::TARGET_XINPUT) {
+            auto xinputState = TranslationLayer().translateToXInput(state);
+            if (!sendToVirtualXInputDevice(state.sourceUserId, xinputState)) {
+                // If immediate send fails, add to queue for retry
+                std::lock_guard<std::mutex> lock(m_injectionQueueMutex);
+                m_injectionQueue.push_back(state);
+            }
+        } else {
+            auto dinputState = TranslationLayer().translateToDInput(state);
+            if (!sendToVirtualDInputDevice(state.sourceUserId, dinputState)) {
+                // If immediate send fails, add to queue for retry
+                std::lock_guard<std::mutex> lock(m_injectionQueueMutex);
+                m_injectionQueue.push_back(state);
+            }
+        }
     }
     
     return true;
@@ -157,11 +183,19 @@ bool VirtualDeviceEmulator::destroyVirtualDevice(int deviceId) {
                           });
     
     if (it != m_virtualDevices.end()) {
-        // Actually destroy the device based on its type
-        if (it->type == TranslatedState::TARGET_XINPUT) {
-            // TODO: Implement actual destruction of virtual XInput device
-        } else {
-            // TODO: Implement actual destruction of virtual DInput device
+        // Remove the target from ViGEmBus
+        if (it->target) {
+            auto client = static_cast<PVIGEM_CLIENT>(m_vigemClient);
+            auto target = static_cast<PVIGEM_TARGET>(it->target);
+            if (it->type == TranslatedState::TARGET_XINPUT) {
+                vigem_target_x360_unregister_notification(target);
+                vigem_target_remove(client, target);
+                vigem_target_free(target);
+            } else {
+                vigem_target_ds4_unregister_notification(target);
+                vigem_target_remove(client, target);
+                vigem_target_free(target);
+            }
         }
         
         m_virtualDevices.erase(it);
@@ -197,32 +231,20 @@ void VirtualDeviceEmulator::setDeviceConnectCallback(DeviceCallback callback) {
 }
 
 bool VirtualDeviceEmulator::initializeInputInjection() {
-    // NOTE: This is a placeholder implementation
-    // Actual Windows Input Injection API usage would require:
-    // 1. Proper COM initialization
-    // 2. Creating InputInjector object
-    // 3. Configuring for gamepad injection
-    
-    // For now, we'll simulate the initialization
-    // In a real implementation, we would:
-    /*
-    HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
-    if (FAILED(hr)) {
+    // Initialize ViGEmBus client
+    auto client = vigem_alloc();
+    if (!client) {
         return false;
     }
-    
-    // Create InputInjector
-    // Windows::UI::Input::Preview::Injection::InputInjector^ injector = 
-    //     Windows::UI::Input::Preview::Injection::InputInjector::TryCreate();
-    // if (!injector) {
-    //     return false;
-    // }
-    */
-    
-    // Since we can't directly use Windows Runtime C++ APIs without proper setup,
-    // we'll use a placeholder approach for now
-    m_inputInjector = static_cast<void*>(const_cast<char*>("PLACEHOLDER")); // Placeholder
-    
+    m_vigemClient = static_cast<void*>(client);
+
+    VIGEM_ERROR vigemError = vigem_connect(client);
+    if (!VIGEM_SUCCESS(vigemError)) {
+        vigem_free(client);
+        m_vigemClient = nullptr;
+        return false;
+    }
+
     return true;
 }
 
@@ -233,35 +255,128 @@ bool VirtualDeviceEmulator::initializeVirtualDevices() {
 }
 
 bool VirtualDeviceEmulator::createVirtualXInputDevice(int userId) {
-    // In a real implementation, this would create a virtual XInput device
-    // using the Input Injection API or a user-mode driver approach
+    if (!m_vigemClient) {
+        return false;
+    }
+
+    // Create a new Xbox 360 controller target
+    PVIGEM_TARGET x360Target = vigem_target_x360_alloc();
+    VIGEM_ERROR error = vigem_target_add(static_cast<PVIGEM_CLIENT>(m_vigemClient), x360Target);
     
-    // Placeholder implementation
+    if (!VIGEM_SUCCESS(error)) {
+        vigem_target_free(x360Target);
+        return false;
+    }
+
+    // Store the target in our device mapping for this userId
+    std::lock_guard<std::mutex> lock(m_devicesMutex);
+    VirtualDevice newDevice;
+    newDevice.id = userId; // Use userId as ID for simplicity
+    newDevice.type = TranslatedState::TARGET_XINPUT;
+    newDevice.userId = userId;
+    newDevice.connected = true;
+    newDevice.lastUpdate = TimingUtils::getPerformanceCounter();
+    newDevice.target = x360Target;
+    
+    m_virtualDevices.push_back(newDevice);
+
     return true;
 }
 
 bool VirtualDeviceEmulator::createVirtualDInputDevice(int userId) {
-    // In a real implementation, this would create a virtual DirectInput device
-    // using the Input Injection API or a user-mode driver approach
+    if (!m_vigemClient) {
+        return false;
+    }
+
+    // Create a new DualShock 4 controller target
+    PVIGEM_TARGET ds4Target = vigem_target_ds4_alloc();
+    VIGEM_ERROR error = vigem_target_add(static_cast<PVIGEM_CLIENT>(m_vigemClient), ds4Target);
     
-    // Placeholder implementation
+    if (!VIGEM_SUCCESS(error)) {
+        vigem_target_free(ds4Target);
+        return false;
+    }
+
+    // Store the target in our device mapping for this userId
+    std::lock_guard<std::mutex> lock(m_devicesMutex);
+    VirtualDevice newDevice;
+    newDevice.id = userId; // Use userId as ID for simplicity
+    newDevice.type = TranslatedState::TARGET_DINPUT;
+    newDevice.userId = userId;
+    newDevice.connected = true;
+    newDevice.lastUpdate = TimingUtils::getPerformanceCounter();
+    newDevice.target = ds4Target;
+    
+    m_virtualDevices.push_back(newDevice);
+
     return true;
 }
 
 bool VirtualDeviceEmulator::sendToVirtualXInputDevice(int userId, const XINPUT_STATE& state) {
-    // In a real implementation, this would inject the XINPUT_STATE to a virtual device
-    // using the Input Injection API
+    // Find the target for this userId
+    std::lock_guard<std::mutex> lock(m_devicesMutex);
+    auto it = std::find_if(m_virtualDevices.begin(), m_virtualDevices.end(),
+                          [userId](const VirtualDevice& device) {
+                              return device.userId == userId && device.type == TranslatedState::TARGET_XINPUT;
+                          });
     
-    // Placeholder implementation
-    // Would use InputInjector to send gamepad input
-    return true;
+    if (it == m_virtualDevices.end() || !it->target) {
+        return false;
+    }
+    
+    // Create an XUSB_REPORT from the XINPUT_STATE
+    XUSB_REPORT report;
+    XUSB_REPORT_INIT(&report);
+    
+    // Map the XINPUT_STATE to XUSB_REPORT
+    report.wButtons = state.Gamepad.wButtons;
+    report.bLeftTrigger = state.Gamepad.bLeftTrigger;
+    report.bRightTrigger = state.Gamepad.bRightTrigger;
+    report.sThumbLX = state.Gamepad.sThumbLX;
+    report.sThumbLY = state.Gamepad.sThumbLY;
+    report.sThumbRX = state.Gamepad.sThumbRX;
+    report.sThumbRY = state.Gamepad.sThumbRY;
+    
+    // Submit the report to ViGEmBus
+    VIGEM_ERROR error = vigem_target_x360_update(static_cast<PVIGEM_CLIENT>(m_vigemClient), static_cast<PVIGEM_TARGET>(it->target), report);
+    
+    return VIGEM_SUCCESS(error);
 }
 
 bool VirtualDeviceEmulator::sendToVirtualDInputDevice(int userId, const TranslationLayer::DInputState& state) {
-    // In a real implementation, this would inject the DInput state to a virtual device
-    // using the Input Injection API
+    // Find the target for this userId
+    std::lock_guard<std::mutex> lock(m_devicesMutex);
+    auto it = std::find_if(m_virtualDevices.begin(), m_virtualDevices.end(),
+                          [userId](const VirtualDevice& device) {
+                              return device.userId == userId && device.type == TranslatedState::TARGET_DINPUT;
+                          });
     
-    // Placeholder implementation
-    // Would use InputInjector to send DirectInput-compatible input
-    return true;
+    if (it == m_virtualDevices.end() || !it->target) {
+        return false;
+    }
+    
+    // Create a DS4_REPORT from the DInputState
+    DS4_REPORT report;
+    DS4_REPORT_INIT(&report);
+    
+    // Map the DInputState to DS4_REPORT
+    report.wButtons = state.wButtons;
+    report.bTriggerL = state.bLeftTrigger;
+    report.bTriggerR = state.bRightTrigger;
+    
+    // DS4 report uses BYTE (0-255) for sticks, not SHORT (-32768 to 32767)
+    // We need to normalize our LONG input (likely -32768..32767 usually) to 0..255
+    auto longToByte = [](LONG val) -> BYTE {
+        return static_cast<BYTE>(TranslationLayer::normalizeLong(val) * 127.5f + 127.5f);
+    };
+
+    report.bThumbLX = longToByte(state.lX);
+    report.bThumbLY = longToByte(state.lY);
+    report.bThumbRX = longToByte(state.lRx);
+    report.bThumbRY = longToByte(state.lRy);
+    
+    // Submit the report to ViGEmBus
+    VIGEM_ERROR error = vigem_target_ds4_update(static_cast<PVIGEM_CLIENT>(m_vigemClient), static_cast<PVIGEM_TARGET>(it->target), report);
+    
+    return VIGEM_SUCCESS(error);
 }
