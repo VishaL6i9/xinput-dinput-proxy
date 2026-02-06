@@ -16,6 +16,9 @@ if(MSVC)
     add_compile_options(/wd4005)  # Disable macro redefinition warnings
     add_compile_definitions(NOMINMAX)
     add_compile_definitions(WIN32_LEAN_AND_MEAN)
+    
+    # Use Static Runtime (/MT) to match ViGEmClient.lib
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     # GCC/Clang flags for performance
     add_compile_options(-O3 -march=native -mtune=native)
@@ -57,6 +60,12 @@ target_link_libraries(${PROJECT_NAME}
     uuid.lib
     hid.lib
     winmm.lib
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/ViGEmClient.lib
+)
+
+# Include ViGEmBus headers
+target_include_directories(${PROJECT_NAME} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/include
 )
 
 # Include directories
