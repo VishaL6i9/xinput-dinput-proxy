@@ -28,11 +28,11 @@ bool InputCapture::initialize() {
     }
     
     if (!initializeHID()) {
-        std::cerr << "InputCapture: initializeHID failed" << std::endl;
+        Logger::error("InputCapture: initializeHID failed");
         return false;
     }
 
-    std::cout << "InputCapture: Initialized with " << m_controllerStates.size() << " controller slots." << std::endl;
+    Logger::log("InputCapture: Initialized with " + std::to_string(m_controllerStates.size()) + " controller slots.");
     
     // Start polling thread with high priority
     m_running = true;
@@ -111,7 +111,7 @@ bool InputCapture::initializeXInput() {
         }
     }
     
-    std::cout << "InputCapture: XInput initialized." << std::endl;
+    Logger::log("InputCapture: XInput initialized.");
     return true;
 }
 
@@ -216,6 +216,12 @@ bool InputCapture::initializeHID() {
                              // Filter for Gamepads/Joysticks only
                              // Usage Page 0x01 (Generic Desktop), Usage 0x04 (Joystick) or 0x05 (Gamepad)
                              if (newState.caps.UsagePage == 0x01 && (newState.caps.Usage == 0x04 || newState.caps.Usage == 0x05)) {
+                                 std::wstring pName = newState.productName;
+                                 std::string pNameStr;
+                                 for (wchar_t wc : pName) {
+                                     pNameStr += static_cast<char>(wc);
+                                 }
+                                 Logger::log("InputCapture: HID Device Found: " + pNameStr);
                                  m_controllerStates.push_back(newState);
                              } else {
                                  // Close handle if not a relevant device
