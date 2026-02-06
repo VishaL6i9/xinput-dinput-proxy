@@ -95,7 +95,10 @@ ninja
     ```
 3.  The dashboard will launch, showing connected controllers.
 4.  Connect your physical controller. The proxy will automatically detect it and create a corresponding virtual device.
+5.  Press `Ctrl+C` in the terminal to stop the service and exit.
 
+> **Note:** If ViGEmBus is not installed, the application will run in **Input Test Mode**. You will see "WARNING: Failed to initialize virtual device emulator" but input detection will still work.
+> 
 > **Note:** For games to pick up the *virtual* controller instead of the physical one, you may need to use tools like `HidHide` to hide the physical device from the game.
 
 ## 📊 Performance
