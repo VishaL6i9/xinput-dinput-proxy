@@ -6,6 +6,7 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
+#include "utils/logger.hpp"
 
 // Windows headers
 #include <windows.h>
@@ -72,6 +73,9 @@ public:
     // Device management
     void refreshDevices();
     int getConnectedDeviceCount() const;
+
+    // Debugging
+    // void getStartupLogs() removed in favor of unified Logger
     
 private:
     bool initializeXInput();
