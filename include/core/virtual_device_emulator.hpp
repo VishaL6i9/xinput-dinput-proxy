@@ -6,6 +6,7 @@
 #include <mutex>
 #include <atomic>
 #include <functional>
+#include "utils/logger.hpp"
 
 #include "core/translation_layer.hpp"
 
@@ -37,6 +38,9 @@ public:
     using DeviceCallback = std::function<void(int deviceId, bool connected)>;
     void setDeviceConnectCallback(DeviceCallback callback);
     
+    // Debugging
+    std::string getLastError() const { return m_lastError; }
+
 private:
     bool initializeInputInjection();
     bool initializeVirtualDevices();
@@ -62,6 +66,8 @@ private:
         void* target;  // ViGEmBus target handle (PVIGEM_TARGET)
     };
     
+    void destroyVirtualDeviceInternal(VirtualDevice& device);
+    
     mutable std::mutex m_devicesMutex;
     std::vector<VirtualDevice> m_virtualDevices;
     
@@ -79,4 +85,7 @@ private:
     std::unique_ptr<std::thread> m_injectionThread;
     std::mutex m_injectionQueueMutex;
     std::vector<TranslatedState> m_injectionQueue;
+    
+    // Error tracking
+    std::string m_lastError;
 };
