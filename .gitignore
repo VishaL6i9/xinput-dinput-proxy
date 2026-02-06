@@ -8,7 +8,6 @@ cmake-build*/
 
 # Log files
 *.log
-log.txt
 
 # Compiled binaries
 *.exe
