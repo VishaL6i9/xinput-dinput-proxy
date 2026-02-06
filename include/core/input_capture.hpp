@@ -28,6 +28,7 @@ struct ControllerState {
     // HID device info
     HANDLE hidHandle;
     std::wstring devicePath;
+    std::wstring productName; // Friendly name
     bool isConnected;
     DWORD lastError; // Store API error code for debugging
     
@@ -47,6 +48,11 @@ struct ControllerState {
     HIDP_CAPS caps;
     std::vector<HIDP_BUTTON_CAPS> buttonCaps;
     std::vector<HIDP_VALUE_CAPS> valueCaps;
+    
+    // Async I/O
+    OVERLAPPED overlapped;
+    bool isReadPending;
+    BYTE inputBuffer[256];
     
     // Timing
     uint64_t timestamp;
