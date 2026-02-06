@@ -69,7 +69,7 @@ int main() {
         virtualDeviceEmulator->sendInput(translatedStates);
         
         // Update dashboard with current stats
-        dashboard->updateStats(frameCount++, deltaTime, inputStates.size());
+        dashboard->updateStats(frameCount++, deltaTime, inputStates);
         
         // Calculate sleep time to maintain desired polling frequency
         // Target ~1000 Hz polling rate (1ms interval)

@@ -10,6 +10,8 @@
 #include "ftxui/component/screen_interactive.hpp"
 #include "ftxui/dom/elements.hpp"
 
+#include "core/input_capture.hpp"
+
 class Dashboard {
 public:
     Dashboard();
@@ -19,7 +21,7 @@ public:
     void stop();
     
     // Update statistics displayed on the dashboard
-    void updateStats(uint64_t frameCount, double deltaTime, size_t controllerCount);
+    void updateStats(uint64_t frameCount, double deltaTime, const std::vector<ControllerState>& states);
     
     // Set status messages
     void setStatusMessage(const std::string& message);
@@ -43,7 +45,7 @@ private:
     // Statistics
     uint64_t m_frameCount;
     double m_deltaTime;
-    size_t m_controllerCount;
+    std::vector<ControllerState> m_controllerStates;
     std::string m_statusMessage;
     
     // Timing

@@ -8,7 +8,6 @@ Dashboard::Dashboard()
     : m_running(false), 
       m_frameCount(0), 
       m_deltaTime(0.0), 
-      m_controllerCount(0),
       m_statusMessage("Initializing..."),
       m_lastUpdateTime(0),
       m_screen(ftxui::ScreenInteractive::Fullscreen()) {
@@ -47,11 +46,11 @@ void Dashboard::stop() {
     }
 }
 
-void Dashboard::updateStats(uint64_t frameCount, double deltaTime, size_t controllerCount) {
+void Dashboard::updateStats(uint64_t frameCount, double deltaTime, const std::vector<ControllerState>& states) {
     std::lock_guard<std::mutex> lock(m_statsMutex);
     m_frameCount = frameCount;
     m_deltaTime = deltaTime;
-    m_controllerCount = controllerCount;
+    m_controllerStates = states;
     m_lastUpdateTime = TimingUtils::getPerformanceCounter();
 }
 
@@ -95,15 +94,26 @@ ftxui::Element Dashboard::renderControllersPanel() {
     std::lock_guard<std::mutex> lock(m_statsMutex);
     
     std::stringstream ss;
-    ss << "Connected Controllers: " << m_controllerCount;
+    ss << "Connected Controllers: " << m_controllerStates.size();
     
-    // Placeholder for detailed controller information
-    auto controllerList = ftxui::vbox({
-        ftxui::text(ss.str()),
-        ftxui::text("Controller 1: Xbox Wireless (XInput)"),
-        ftxui::text("Controller 2: Kreo Mirage (HID)"),
-        ftxui::text("Virtual Device: Xbox 360 (Emulated)")
-    }) | ftxui::border;
+    ftxui::Elements children;
+    children.push_back(ftxui::text(ss.str()));
+    children.push_back(ftxui::separator());
+    
+    for (const auto& state : m_controllerStates) {
+        std::string type = (state.userId >= 0) ? "XInput (" + std::to_string(state.userId) + ")" : "HID Input";
+        std::string status = state.isConnected ? "Connected" : "Disconnected";
+        
+        std::stringstream info;
+        info << "- " << type << ": " << status;
+        children.push_back(ftxui::text(info.str()));
+    }
+    
+    if (m_controllerStates.empty()) {
+        children.push_back(ftxui::text("No controllers detected"));
+    }
+    
+    auto controllerList = ftxui::vbox(std::move(children)) | ftxui::border;
     
     return ftxui::vbox({
         ftxui::text("Controllers") | ftxui::bold,
