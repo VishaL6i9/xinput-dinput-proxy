@@ -17,14 +17,13 @@ if (Test-Path $vsInstallerPath) {
             $tempBat = [System.IO.Path]::GetTempFileName()
             $tempBat = [System.IO.Path]::ChangeExtension($tempBat, ".bat")
             
-            # Create the batch file content with proper error handling
+            # Create the batch file content with proper error handling and NO PAUSE
             $batchContent = "@echo off`r`n" +
                            "setlocal enabledelayedexpansion`r`n`r`n" +
                            "REM Set up the Visual Studio environment`r`n" +
                            "call `"$vcvarsPath`"`r`n`r`n" +
                            "if errorlevel 1 (`r`n" +
                            "    echo Failed to set up Visual Studio environment`r`n" +
-                           "    pause`r`n" +
                            "    exit /b 1`r`n" +
                            ")`r`n`r`n" +
                            "echo Visual Studio environment set up successfully`r`n`r`n" +
@@ -36,37 +35,43 @@ if (Test-Path $vsInstallerPath) {
                            "cmake .. -GNinja -DCMAKE_BUILD_TYPE=Release`r`n`r`n" +
                            "if errorlevel 1 (`r`n" +
                            "    echo CMake configuration failed!`r`n" +
-                           "    pause`r`n" +
                            "    exit /b 1`r`n" +
                            ")`r`n`r`n" +
                            "echo Building with Ninja...`r`n" +
                            "ninja`r`n`r`n" +
                            "if errorlevel 1 (`r`n" +
                            "    echo Build failed!`r`n" +
-                           "    pause`r`n" +
                            "    exit /b 1`r`n" +
                            ")`r`n`r`n" +
                            "echo.`r`n" +
                            "echo Build completed successfully!`r`n" +
-                           "echo Executable is located at: $(Join-Path (Get-Location) `"build\xinput_dinput_proxy.exe`")`r`n" +
-                           "echo.`r`n" +
-                           "pause`r`n"
+                           "echo Executable is located at: build\xinput_dinput_proxy.exe`r`n" +
+                           "echo.`r`n"
             
             [System.IO.File]::WriteAllText($tempBat, $batchContent)
             
             Write-Host "Running build with Visual Studio environment..." -ForegroundColor Cyan
             cmd /c $tempBat
             
+            # Check exit code
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "Build failed with exit code $LASTEXITCODE" -ForegroundColor Red
+                # Clean up
+                Remove-Item $tempBat
+                exit 1
+            }
+            
             # Clean up
             Remove-Item $tempBat
         } else {
             Write-Host "Could not find VC environment script at: $vcvarsPath" -ForegroundColor Red
+            exit 1
         }
     } else {
         Write-Host "Could not find Visual Studio with C++ tools." -ForegroundColor Red
-        Write-Host "Please make sure Visual Studio with C++ development tools is installed." -ForegroundColor Yellow
+        exit 1
     }
 } else {
     Write-Host "Could not find Visual Studio installer at: $vsInstallerPath" -ForegroundColor Red
-    Write-Host "Please make sure Visual Studio is installed." -ForegroundColor Yellow
+    exit 1
 }

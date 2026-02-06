@@ -12,7 +12,6 @@ for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio
 if not defined VSINSTALLDIR (
     echo Error: Could not find Visual Studio with C++ tools installed.
     echo Please make sure Visual Studio with C++ development tools is installed.
-    pause
     exit /b 1
 )
 
@@ -32,7 +31,6 @@ cmake .. -GNinja -DCMAKE_BUILD_TYPE=Release
 
 if %ERRORLEVEL% NEQ 0 (
     echo CMake configuration failed!
-    pause
     exit /b %ERRORLEVEL%
 )
 
@@ -41,7 +39,6 @@ ninja
 
 if %ERRORLEVEL% NEQ 0 (
     echo Build failed!
-    pause
     exit /b %ERRORLEVEL%
 )
 
@@ -50,4 +47,3 @@ echo Build completed successfully!
 echo Executable is located at: build\xinput_dinput_proxy.exe
 echo.
 echo You can run the application with: build\xinput_dinput_proxy.exe
-pause
