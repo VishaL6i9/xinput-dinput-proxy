@@ -56,6 +56,12 @@ void Dashboard::updateStats(uint64_t frameCount, double deltaTime, const std::ve
     m_screen.Post(ftxui::Event::Custom);
 }
 
+void Dashboard::setViGEmAvailable(bool available) {
+    std::lock_guard<std::mutex> lock(m_statsMutex);
+    m_vigemAvailable = available;
+    m_screen.Post(ftxui::Event::Custom);
+}
+
 void Dashboard::setStatusMessage(const std::string& message) {
     std::lock_guard<std::mutex> lock(m_statsMutex);
     m_statusMessage = message;
@@ -107,8 +113,11 @@ ftxui::Element Dashboard::renderControllersPanel() {
         if (state.userId >= 0) {
             type = "XInput (" + std::to_string(state.userId) + ")";
         } else {
-            // Convert wide string product name to narrow string for FTXUI
-            std::string productName(state.productName.begin(), state.productName.end());
+            // Convert wide string product name to narrow string for FTXUI explicitly to avoid C4244
+            std::string productName;
+            for (wchar_t wc : state.productName) {
+                productName += static_cast<char>(wc);
+            }
             type = productName.empty() ? "HID Input" : productName;
         }
         
@@ -180,6 +189,7 @@ ftxui::Element Dashboard::renderStatusPanel() {
     auto statusInfo = ftxui::vbox({
         ftxui::text("Status: " + m_statusMessage),
         ftxui::text("Service: Running"),
+        ftxui::text(std::string("ViGEmBus: ") + (m_vigemAvailable ? "Connected" : "Not Found (Input Test Mode)")),
         ftxui::text("Mode: XInput <-> DInput"),
         ftxui::text("SOCD: Last Win"),
         ftxui::text("Debouncing: Enabled")
