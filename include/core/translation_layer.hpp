@@ -92,4 +92,12 @@ private:
 
     // Convert HID state to standardized format
     TranslatedState convertHIDToStandard(const ControllerState& inputState);
+
+public:
+    // Helpers for safe scaling
+    static SHORT scaleLongToShort(LONG value);
+    static LONG scaleShortToLong(SHORT value);
+    static float normalizeShort(SHORT value);
+    static float normalizeLong(LONG value);
+    static float normalizeByte(BYTE value);
 };

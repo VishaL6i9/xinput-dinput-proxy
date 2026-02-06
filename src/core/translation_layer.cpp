@@ -233,12 +233,65 @@ TranslationLayer::DInputState TranslationLayer::translateToDInput(const Translat
     dinputState.bRightTrigger = state.gamepad.bRightTrigger;
     
     // Map thumbsticks to DirectInput axes
-    dinputState.lX = state.gamepad.sThumbLX;
-    dinputState.lY = state.gamepad.sThumbLY;
-    dinputState.lZ = (static_cast<LONG>(state.gamepad.bLeftTrigger) * 256) - 128; // Map trigger to Z axis
-    dinputState.lRx = state.gamepad.sThumbRX;
-    dinputState.lRy = state.gamepad.sThumbRY;
-    dinputState.lRz = (static_cast<LONG>(state.gamepad.bRightTrigger) * 256) - 128; // Map trigger to Rz axis
+    // Use scaling helpers to convert from SHORT to LONG safely
+    dinputState.lX = scaleShortToLong(state.gamepad.sThumbLX);
+    dinputState.lY = scaleShortToLong(state.gamepad.sThumbLY);
+    
+    // Map triggers to Z/Rz axes
+    // Triggers are 0-255, we want to map this to 0-65535 (LONG full range) or -32768 to 32767
+    // Standard XInput trigger behavior is 0 (released) to 255 (pressed)
+    // Let's map 0->0 and 255->65535 for DInput axes if they are unsigned, or center them.
+    // However, most DInput implementations expect centered axes. 
+    // For trigger-as-axis, let's map 0-255 => 0-65535 (Unsigned) or -32768-32767.
+    // 
+    // Implementing standard mapping: 0 -> -32768 (min), 255 -> 32767 (max)
+    dinputState.lZ = static_cast<LONG>(state.gamepad.bLeftTrigger * 257) - 32768; 
+    
+    dinputState.lRx = scaleShortToLong(state.gamepad.sThumbRX);
+    dinputState.lRy = scaleShortToLong(state.gamepad.sThumbRY);
+    
+    dinputState.lRz = static_cast<LONG>(state.gamepad.bRightTrigger * 257) - 32768;
     
     return dinputState;
+}
+
+SHORT TranslationLayer::scaleLongToShort(LONG value) {
+    // scale 32-bit (assumed -32768 to 32767 range usually, effectively 16-bit range in 32-bit container) 
+    // OR 0-65535 range. 
+    // DInput standard is 0-65535 often, but can be formatted differently.
+    // Assuming standard 16-bit signed range in 32-bit container for this context or full 32-bit range?
+    // Let's assume standard DInput is 0..65535 
+    
+    // Convert 0..65535 to -32768..32767
+    int32_t val = static_cast<int32_t>(value);
+    
+    // Clamp to 16-bit range
+    if (val > 32767) val = 32767;
+    if (val < -32768) val = -32768;
+    
+    return static_cast<SHORT>(val);
+}
+
+LONG TranslationLayer::scaleShortToLong(SHORT value) {
+    // Convert -32768..32767 to DInput 0..65535 ?
+    // Or keep it signed -32768..32767?
+    // Most modern DInput usage expects 0..65535 for axes. 
+    // But let's stick to 1:1 signed mapping if our DInputState structure expects signed LONGs
+    // that mimic XInput behavior.
+    
+    // Actually, `lX`, `lY` etc are LONG. 
+    // Let's return the value preserving the signed-ness but in 32-bit container
+    return static_cast<LONG>(value);
+}
+
+float TranslationLayer::normalizeShort(SHORT value) {
+    return std::max(-1.0f, std::min(1.0f, static_cast<float>(value) / 32767.0f));
+}
+
+float TranslationLayer::normalizeLong(LONG value) {
+     return std::max(-1.0f, std::min(1.0f, static_cast<float>(value) / 32767.0f)); // Assuming signed 16-bit content
+}
+
+float TranslationLayer::normalizeByte(BYTE value) {
+    return std::max(0.0f, std::min(1.0f, static_cast<float>(value) / 255.0f));
 }
