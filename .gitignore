@@ -1,0 +1,36 @@
+# Build directories
+build/
+cmake-build*/
+
+# IDE files
+.idea/
+.vscode/
+
+# Log files
+*.log
+log.txt
+
+# Compiled binaries
+*.exe
+*.dll
+*.lib
+*.obj
+*.o
+
+# CMake files
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Makefile
+cmake_install.cmake
+
+# Ninja files
+.ninja_log
+.ninja_deps
+build.ninja
+
+# Temporary files
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
