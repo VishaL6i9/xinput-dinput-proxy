@@ -168,6 +168,27 @@ bool InputCapture::initializeHID() {
                     if (deviceHandle != INVALID_HANDLE_VALUE) {
                         newState.hidHandle = deviceHandle;
                         newState.isConnected = true;
+                        
+                        // Get Preparsed Data
+                        PHIDP_PREPARSED_DATA preparsedData;
+                        if (HidD_GetPreparsedData(deviceHandle, &preparsedData)) {
+                             newState.preparsedData = preparsedData;
+                             HidP_GetCaps(preparsedData, &newState.caps);
+                             
+                             // Get Button Caps
+                             USHORT capsLength = newState.caps.NumberInputButtonCaps;
+                             if (capsLength > 0) {
+                                 newState.buttonCaps.resize(capsLength);
+                                 HidP_GetButtonCaps(HidP_Input, newState.buttonCaps.data(), &capsLength, preparsedData);
+                             }
+                             
+                             // Get Value Caps (Axes)
+                             capsLength = newState.caps.NumberInputValueCaps;
+                             if (capsLength > 0) {
+                                 newState.valueCaps.resize(capsLength);
+                                 HidP_GetValueCaps(HidP_Input, newState.valueCaps.data(), &capsLength, preparsedData);
+                             }
+                        }
                     } else {
                         newState.isConnected = false;
                     }
@@ -219,15 +240,8 @@ void InputCapture::pollHIDControllers() {
                 state.isConnected = true;
                 state.timestamp = TimingUtils::getPerformanceCounter();
                 
-                // Parse the HID report based on the device's capabilities
-                // This is a simplified approach - in a real implementation, 
-                // we'd need to parse the device's report descriptor
-                if (bytesRead >= sizeof(XINPUT_GAMEPAD)) {
-                    // Map HID report to gamepad structure
-                    // This is a simplified mapping - actual implementation would need 
-                    // device-specific parsing based on report descriptor
-                    memcpy(&state.gamepad, buffer, std::min(sizeof(state.gamepad), static_cast<size_t>(bytesRead)));
-                }
+                // Parse the HID report properly using HidP APIs
+                parseHIDReport(state, reinterpret_cast<PCHAR>(buffer), bytesRead);
             } else {
                 // Check if device is still connected by trying to get attributes
                 HIDD_ATTRIBUTES attributes;
@@ -238,6 +252,88 @@ void InputCapture::pollHIDControllers() {
                     state.hidHandle = INVALID_HANDLE_VALUE;
                 }
             }
+        }
+    }
+}
+
+void InputCapture::parseHIDReport(ControllerState& state, PCHAR report, ULONG reportLength) {
+    if (!state.preparsedData) return;
+
+    HIDP_CAPS caps = state.caps;
+    
+    // Parse Buttons
+    getHIDUsages(state, report, reportLength);
+
+    // Parse Values (Axes)
+    getHIDValues(state, report, reportLength);
+}
+
+void InputCapture::getHIDUsages(ControllerState& state, PCHAR report, ULONG reportLength) {
+    ULONG usageLength = state.caps.NumberInputButtonCaps;
+    if (usageLength == 0) return;
+
+    std::vector<USAGE> usages(usageLength);
+    NTSTATUS status = HidP_GetUsages(
+        HidP_Input, 
+        state.caps.UsagePage, 
+        0, 
+        usages.data(), 
+        &usageLength, 
+        state.preparsedData, 
+        report, 
+        reportLength
+    );
+
+    if (status == HIDP_STATUS_SUCCESS) {
+        state.gamepad.wButtons = 0;
+        for (ULONG i = 0; i < usageLength; ++i) {
+             // Map standard usages to XInput buttons
+             // Simplified generic mapping
+             switch (usages[i]) {
+                 case 0x01: state.gamepad.wButtons |= XINPUT_GAMEPAD_A; break;
+                 case 0x02: state.gamepad.wButtons |= XINPUT_GAMEPAD_B; break;
+                 case 0x03: state.gamepad.wButtons |= XINPUT_GAMEPAD_X; break;
+                 case 0x04: state.gamepad.wButtons |= XINPUT_GAMEPAD_Y; break;
+                 case 0x05: state.gamepad.wButtons |= XINPUT_GAMEPAD_LEFT_SHOULDER; break;
+                 case 0x06: state.gamepad.wButtons |= XINPUT_GAMEPAD_RIGHT_SHOULDER; break;
+                 // Further mapping needed for specific devices
+             }
+        }
+    }
+}
+
+void InputCapture::getHIDValues(ControllerState& state, PCHAR report, ULONG reportLength) {
+    for (const auto& cap : state.valueCaps) {
+        ULONG value;
+        NTSTATUS status = HidP_GetUsageValue(
+            HidP_Input, 
+            cap.UsagePage, 
+            0, 
+            cap.Range.UsageMin, 
+            &value, 
+            state.preparsedData, 
+            report, 
+            reportLength
+        );
+        
+        if (status == HIDP_STATUS_SUCCESS) {
+             // Map axes generic desktop page
+             if (cap.UsagePage == 0x01) {
+                 switch (cap.Range.UsageMin) {
+                     case 0x30: // X
+                        state.gamepad.sThumbLX = static_cast<SHORT>(value - 32768); 
+                        break;
+                     case 0x31: // Y
+                        state.gamepad.sThumbLY = static_cast<SHORT>(32768 - value); // Invert Y
+                        break;
+                     case 0x32: // Z (often Right X or Trigger)
+                        state.gamepad.sThumbRX = static_cast<SHORT>(value - 32768);
+                        break;
+                     case 0x35: // Rz (often Right Y)
+                        state.gamepad.sThumbRY = static_cast<SHORT>(32768 - value); 
+                        break;
+                 }
+             }
         }
     }
 }

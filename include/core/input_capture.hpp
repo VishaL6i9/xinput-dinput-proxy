@@ -41,6 +41,12 @@ struct ControllerState {
         SHORT sThumbRY;
     } gamepad;
     
+    // HID Data
+    PHIDP_PREPARSED_DATA preparsedData;
+    HIDP_CAPS caps;
+    std::vector<HIDP_BUTTON_CAPS> buttonCaps;
+    std::vector<HIDP_VALUE_CAPS> valueCaps;
+    
     // Timing
     uint64_t timestamp;
 };
@@ -77,4 +83,9 @@ private:
     
     // Device enumeration
     std::vector<std::wstring> m_hidDevicePaths;
+
+    // HID Parsing helpers
+    void parseHIDReport(ControllerState& state, PCHAR report, ULONG reportLength);
+    void getHIDUsages(ControllerState& state, PCHAR report, ULONG reportLength);
+    void getHIDValues(ControllerState& state, PCHAR report, ULONG reportLength);
 };
