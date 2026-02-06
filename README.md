@@ -302,11 +302,11 @@ For support, please open an issue in the GitHub repository or contact the develo
 
 ## Badges
 
-[![GitHub stars](https://img.shields.io/github/stars/username/repository?style=social)](https://github.com/VishaL6i9/repository/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/username/repository?style=social)](https://github.com/VishaL6i9/repository/network/members)
-[![GitHub contributors](https://img.shields.io/github/contributors/username/repository)](https://github.com/VishaL6i9/repository/graphs/contributors)
-[![GitHub issues](https://img.shields.io/github/issues/username/repository)](https://github.com/VishaL6i9/repository/issues)
-[![GitHub pull requests](https://img.shields.io/github/issues-pr/username/repository)](https://github.com/VishaL6i9/repository/pulls)
+[![GitHub stars](https://img.shields.io/github/stars/VishaL6i9/xinput-dinput-proxy?style=social)](https://github.com/VishaL6i9/xinput-dinput-proxy/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/VishaL6i9/xinput-dinput-proxy?style=social)](https://github.com/VishaL6i9/xinput-dinput-proxy/network/members)
+[![GitHub contributors](https://img.shields.io/github/contributors/VishaL6i9/xinput-dinput-proxy)](https://github.com/VishaL6i9/xinput-dinput-proxy/graphs/contributors)
+[![GitHub issues](https://img.shields.io/github/issues/VishaL6i9/xinput-dinput-proxy)](https://github.com/VishaL6i9/xinput-dinput-proxy/issues)
+[![GitHub pull requests](https://img.shields.io/github/issues-pr/VishaL6i9/xinput-dinput-proxy)](https://github.com/VishaL6i9/xinput-dinput-proxy/pulls)
 
 ---
 
