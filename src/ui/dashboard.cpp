@@ -28,12 +28,22 @@ void Dashboard::run() {
     initializeUI();
     
     // Create a renderer component for the dashboard
+    // Create a renderer component for the dashboard
     auto renderer = ftxui::Renderer([&]() {
         return renderMainScreen();
     });
+
+    // Handle events
+    auto component = ftxui::CatchEvent(renderer, [&](ftxui::Event event) {
+        if (event == ftxui::Event::Character('q') || event == ftxui::Event::Escape) {
+            m_screen.ExitLoopClosure()();
+            return true;
+        }
+        return false;
+    });
     
     // Main UI loop
-    m_screen.Loop(renderer);
+    m_screen.Loop(component);
 }
 
 void Dashboard::stop() {
@@ -107,6 +117,11 @@ ftxui::Element Dashboard::renderControllersPanel() {
         
         std::stringstream info;
         info << "- " << type << ": " << status;
+        
+        if (!state.isConnected && state.userId >= 0) {
+            info << " (Err: " << state.lastError << ")";
+        }
+        
         children.push_back(ftxui::text(info.str()));
     }
     
