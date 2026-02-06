@@ -29,6 +29,7 @@ struct ControllerState {
     HANDLE hidHandle;
     std::wstring devicePath;
     bool isConnected;
+    DWORD lastError; // Store API error code for debugging
     
     // Button states
     struct {

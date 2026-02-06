@@ -93,7 +93,9 @@ bool InputCapture::initializeXInput() {
         ControllerState ctrlState{};
         ctrlState.userId = static_cast<int>(i);
         ctrlState.xinputState = initialState;
+        ctrlState.xinputState = initialState;
         ctrlState.isConnected = (res == ERROR_SUCCESS);
+        ctrlState.lastError = res;
         ctrlState.timestamp = TimingUtils::getPerformanceCounter();
         
         {
@@ -217,7 +219,10 @@ void InputCapture::pollXInputControllers() {
             if (i < m_controllerStates.size()) {
                 m_controllerStates[i].xinputState = state;
                 m_controllerStates[i].xinputPacketNumber = state.dwPacketNumber;
+                m_controllerStates[i].xinputState = state;
+                m_controllerStates[i].xinputPacketNumber = state.dwPacketNumber;
                 m_controllerStates[i].isConnected = (result == ERROR_SUCCESS);
+                m_controllerStates[i].lastError = result;
                 m_controllerStates[i].timestamp = TimingUtils::getPerformanceCounter();
             }
         }
