@@ -8,6 +8,7 @@
 #include "core/virtual_device_emulator.hpp"
 #include "ui/dashboard.hpp"
 #include "utils/timing.hpp"
+#include "utils/logger.hpp"
 #include <csignal>
 #include <atomic>
 
@@ -42,15 +43,14 @@ int main() {
 
     // Initialize modules
     if (!inputCapture->initialize()) {
-        std::cerr << "Failed to initialize input capture module" << std::endl;
         return -1;
     }
 
     if (!virtualDeviceEmulator->initialize()) {
-        std::cerr << "WARNING: Failed to initialize virtual device emulator." << std::endl;
-        std::cerr << "Virtual devices will not be created, but you can still verify controller detection." << std::endl;
-        std::cerr << "Make sure ViGEmBus driver is installed." << std::endl;
-        // return -1; // Don't exit, allow testing inputs
+        dashboard->setViGEmAvailable(false);
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    } else {
+        dashboard->setViGEmAvailable(true);
     }
 
     std::cout << "Initialization successful!" << std::endl;
@@ -109,5 +109,13 @@ int main() {
     }
 
     std::cout << "Proxy service stopped." << std::endl;
+    std::cout << "\n--- Startup Log Summary ---" << std::endl;
+    
+    for (const auto& log : Logger::getLogs()) {
+        std::cout << log << std::endl;
+    }
+    
+    std::cout << "---------------------------" << std::endl;
+
     return 0;
 }
