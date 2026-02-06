@@ -8,6 +8,18 @@
 #include "core/virtual_device_emulator.hpp"
 #include "ui/dashboard.hpp"
 #include "utils/timing.hpp"
+#include <csignal>
+#include <atomic>
+
+// Global flag for signal handling
+std::atomic<bool> g_running(true);
+
+void signalHandler(int signum) {
+    if (signum == SIGINT) {
+        std::cout << "\nInterrupt signal (" << signum << ") received. Stopping..." << std::endl;
+        g_running = false;
+    }
+}
 
 int main() {
     std::cout << "XInput-DirectInput Proxy for Windows 11" << std::endl;
@@ -49,12 +61,14 @@ int main() {
         dashboard->run();
     });
 
+    // Register signal handler
+    signal(SIGINT, signalHandler);
+
     // Main proxy loop
-    bool running = true;
     uint64_t frameCount = 0;
     auto lastTime = TimingUtils::getPerformanceCounter();
 
-    while (running) {
+    while (g_running) {
         auto currentTime = TimingUtils::getPerformanceCounter();
         double deltaTime = TimingUtils::counterToMicroseconds(currentTime - lastTime);
         
