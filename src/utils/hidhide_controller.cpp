@@ -2,6 +2,8 @@
 #include "utils/logger.hpp"
 #include <algorithm>
 #include <cstring>
+#include <sstream>
+#include <iomanip>
 
 HidHideController::HidHideController() : m_driverHandle(INVALID_HANDLE_VALUE), m_connected(false) {
 }
@@ -41,6 +43,60 @@ bool HidHideController::connect() {
 
     m_connected = true;
     Logger::log("Successfully connected to HidHide driver");
+    
+    // Log IOCTL codes for debugging
+    std::stringstream ss;
+    ss << "Debug: IOCTL_GET_BLACKLIST = 0x" << std::hex << IOCTL_GET_BLACKLIST;
+    Logger::log(ss.str());
+    ss.str("");
+    ss << "Debug: IOCTL_SET_BLACKLIST = 0x" << std::hex << IOCTL_SET_BLACKLIST;
+    Logger::log(ss.str());
+    ss.str("");
+    ss << "Debug: IOCTL_GET_ACTIVE = 0x" << std::hex << IOCTL_GET_ACTIVE;
+    Logger::log(ss.str());
+    
+    // Try to check if driver is active
+    BOOL active = FALSE;
+    DWORD bytesReturned = 0;
+    BOOL result = DeviceIoControl(
+        m_driverHandle,
+        IOCTL_GET_ACTIVE,
+        nullptr, 0,
+        &active, sizeof(active),
+        &bytesReturned,
+        NULL
+    );
+    
+    if (result) {
+        Logger::log("Debug: HidHide active state: " + std::string(active ? "ACTIVE" : "INACTIVE"));
+        Logger::log("Debug: Bytes returned: " + std::to_string(bytesReturned));
+    } else {
+        DWORD err = GetLastError();
+        Logger::log("Debug: Could not query HidHide active state. Error: " + std::to_string(err));
+    }
+    
+    // Check inverse mode
+    BOOL inverse = FALSE;
+    bytesReturned = 0;
+    result = DeviceIoControl(
+        m_driverHandle,
+        IOCTL_GET_WLINVERSE,
+        nullptr, 0,
+        &inverse, sizeof(inverse),
+        &bytesReturned,
+        NULL
+    );
+    
+    if (result) {
+        Logger::log("Debug: HidHide inverse mode: " + std::string(inverse ? "ENABLED (whitelist mode)" : "DISABLED (blacklist mode)"));
+        if (inverse) {
+            Logger::log("WARNING: HidHide is in whitelist mode. This application needs to be added to the whitelist in HidHide Configuration Client.");
+        }
+    } else {
+        DWORD err = GetLastError();
+        Logger::log("Debug: Could not query HidHide inverse mode. Error: " + std::to_string(err));
+    }
+    
     return true;
 }
 
@@ -79,20 +135,20 @@ bool HidHideController::addDeviceToBlacklist(const std::wstring& devicePath) {
     // First get the current blacklist
     std::vector<std::wstring> currentList = getBlacklist();
     
-    // If getBlacklist failed, don't spam errors
+    // If getBlacklist failed (HidHide not working), silently fail
     static bool hidHideFailed = false;
     if (currentList.empty() && !hidHideFailed) {
+        // First failure - getBlacklist already logged the error
         hidHideFailed = true;
         return false;
     }
     if (hidHideFailed) {
-        return false; // Silently fail if HidHide is not working
+        return false; // Silently fail on subsequent attempts
     }
     
     // Check if device is already in the list
     if (std::find(currentList.begin(), currentList.end(), devicePath) != currentList.end()) {
-        // Device already in blacklist
-        Logger::log("Device already in HidHide blacklist: " + Logger::wstringToNarrow(devicePath));
+        // Device already in blacklist, no need to log
         return true; // Already added
     }
 
@@ -100,12 +156,14 @@ bool HidHideController::addDeviceToBlacklist(const std::wstring& devicePath) {
     currentList.push_back(devicePath);
 
     // Prepare the buffer for the new list
+    // HidHide expects a multi-string format: count (ULONG) followed by null-terminated wide strings
     size_t totalSize = sizeof(ULONG); // Count
     for (const auto& path : currentList) {
         totalSize += (path.length() + 1) * sizeof(WCHAR); // Include null terminator
     }
+    totalSize += sizeof(WCHAR); // Extra null terminator at the end
 
-    std::vector<BYTE> buffer(totalSize);
+    std::vector<BYTE> buffer(totalSize, 0);
     ULONG* countPtr = reinterpret_cast<ULONG*>(buffer.data());
     *countPtr = static_cast<ULONG>(currentList.size());
 
@@ -114,13 +172,24 @@ bool HidHideController::addDeviceToBlacklist(const std::wstring& devicePath) {
         wcscpy_s(pathPtr, path.length() + 1, path.c_str());
         pathPtr += path.length() + 1;
     }
+    // pathPtr now points to the final null terminator (already zeroed)
 
+    Logger::log("Debug: Attempting to set blacklist with " + std::to_string(currentList.size()) + " devices");
+    Logger::log("Debug: Buffer size: " + std::to_string(buffer.size()) + " bytes");
+    
     bool result = sendIoctl(IOCTL_SET_BLACKLIST, buffer.data(), static_cast<DWORD>(buffer.size()));
     
-    if (result) {
-        Logger::log("Added device to HidHide blacklist: " + Logger::wstringToNarrow(devicePath));
+    if (!result) {
+        DWORD err = GetLastError();
+        // Only log error once per session
+        static bool setBlacklistErrorLogged = false;
+        if (!setBlacklistErrorLogged) {
+            Logger::error("Failed to add device to HidHide blacklist. Error: " + std::to_string(err));
+            Logger::error("Device path: " + Logger::wstringToNarrow(devicePath));
+            setBlacklistErrorLogged = true;
+        }
     } else {
-        Logger::error("Failed to add device to HidHide blacklist: " + Logger::wstringToNarrow(devicePath));
+        Logger::log("Successfully added device to HidHide blacklist: " + Logger::wstringToNarrow(devicePath));
     }
 
     return result;
@@ -207,10 +276,14 @@ std::vector<std::wstring> HidHideController::getBlacklist() {
     );
 
     if (result != TRUE) {
+        DWORD error = GetLastError();
         static bool errorLogged = false;
         if (!errorLogged) {
-            Logger::error("Failed to get HidHide blacklist. Error: " + std::to_string(GetLastError()));
+            Logger::error("Failed to get HidHide blacklist. Error: " + std::to_string(error));
             Logger::error("HidHide may not be properly installed or configured. Device hiding will not work.");
+            Logger::log("Debug: Driver handle valid: " + std::string(m_driverHandle != INVALID_HANDLE_VALUE ? "YES" : "NO"));
+            Logger::log("Debug: IOCTL code: 0x" + std::to_string(IOCTL_GET_BLACKLIST));
+            Logger::log("Debug: Buffer size: " + std::to_string(sizeBuffer.size()));
             errorLogged = true;
         }
         return {};
