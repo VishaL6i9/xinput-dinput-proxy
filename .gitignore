@@ -33,3 +33,7 @@ build.ninja
 *.temp
 .DS_Store
 Thumbs.db
+
+# Crash dumps
+*.dmp
+*.mdmp
