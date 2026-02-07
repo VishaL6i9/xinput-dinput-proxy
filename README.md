@@ -13,7 +13,7 @@
 
 ---
 
-## 📖 Overview
+## Overview
 
 The **XInput-DirectInput Proxy** is a specialized tool designed to solve compatibility issues between modern Gamepads (XInput) and legacy applications or peripherals (DirectInput/HID) on Windows 11. 
 
@@ -24,21 +24,30 @@ By leveraging **low-latency HID parsing** and the **ViGEmBus** kernel-mode drive
 
 Unlike basic wrappers, this project parses raw HID reports directly from the Windows API, ensuring maximum compatibility and minimal latency.
 
-## ✨ Key Features
+## Key Features
 
-*   **⚡ Sub-millisecond Latency:** Optimized polling loop using `QueryPerformanceCounter` targeting 1000Hz+ refresh rates.
-*   **🎮 Universal Translation:**
+*   **Sub-millisecond Latency:** Optimized polling loop using `QueryPerformanceCounter` targeting 1000Hz+ refresh rates.
+*   **Universal Translation:**
     *   **HID to XInput:** Translates generic joystick/gamepad inputs to standard X360 instructions.
     *   **XInput to DirectInput:** Maps Xbox inputs to standard DirectInput axes and buttons (DualShock 4 emulation).
-*   **🔧 Advanced HID Parsing:** Uses Windows `HidP_` APIs to correctly interpret buttons and axes from any HID-compliant device, regardless of vendor.
-*   **🧠 Smart Input Processing:**
+*   **Advanced HID Parsing:** Uses Windows `HidP_` APIs to correctly interpret buttons and axes from any HID-compliant device, regardless of vendor.
+*   **Smart Input Processing:**
     *   **SOCD Cleaning:** Configurable resolution for Simultaneous Opposing Cardinal Directions (Last-Win, First-Win, Neutral).
     *   **Anti-Deadzone & Scaling:** Mathematical scaling for 8-bit, 16-bit, and 32-bit axis data to prevent truncation.
     *   **Debouncing:** Logic to filter out mechanical switch noise.
-*   **🖥️ Real-time Dashboard:** Interactive CLI dashboard (built with FTXUI) displaying connected devices, raw input states, and translation statistics.
-*   **📦 Dynamic Device Management:** Automatically creates and destroys virtual devices as physical controllers are plugged in or removed.
+*   **Interactive Dashboard:** Real-time CLI dashboard (built with FTXUI) with:
+    *   Live controller detection and connection status
+    *   Input test panel with button press tracking (green = pressed, blue = tested, dim = untested)
+    *   Real-time performance metrics (FPS, latency, frame time)
+    *   Interactive configuration controls (SOCD, debouncing, HidHide, translation toggle)
+    *   Rumble/vibration testing with intensity control
+*   **Configuration System:** INI-based settings with runtime updates and persistence
+*   **Crash-Resistant Logging:** Continuous auto-save logging that survives crashes for debugging
+*   **HidHide Integration:** Automatic physical device hiding to prevent double-input issues
+*   **Dynamic Device Management:** Automatically creates and destroys virtual devices as physical controllers are plugged in or removed
+*   **Duplicate Prevention:** Smart device tracking prevents multiple HID interfaces from the same controller filling all slots
 
-## 🏗️ Architecture
+## Architecture
 
 The system is built on a modular four-layer architecture designed for separation of concerns and speed:
 
@@ -54,16 +63,21 @@ The system is built on a modular four-layer architecture designed for separation
 4.  **Presentation Layer:**
     *   Renders the CLI dashboard on a separate thread to ensure input processing never stalls.
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 
 *   **OS:** Windows 10 or 11 (64-bit)
-*   **Drivers:** [ViGEmBus Driver](https://github.com/nefarius/ViGEmBus/releases) must be installed.
+*   **Drivers:** 
+    *   **ViGEmBus Driver** (REQUIRED): [Community Fork](https://github.com/nefarius/ViGEmBus/releases) - The original ViGEmBus was retired in 2023. Use the community-maintained fork.
+    *   **HidHide Driver** (OPTIONAL): [Download](https://github.com/nefarius/HidHide/releases) - Required only if you want to hide physical devices from games.
 *   **Build Tools:** Visual Studio 2022 with C++ Desktop Development workload.
 *   **Dependencies:** CMake (3.20+) and Ninja (recommended).
+*   **Permissions:** Administrator privileges required for driver access.
 
-### 🛠️ Building the Project
+> **Warning:** Without ViGEmBus, the application will run in "Input Test Mode" where you can see controller inputs but cannot create virtual devices. HidHide is optional but recommended for best compatibility.
+
+### Building the Project
 
 This project includes automated scripts for easy building.
 
@@ -86,22 +100,54 @@ cmake .. -GNinja -DCMAKE_BUILD_TYPE=Release
 ninja
 ```
 
-### 🏃 Usage
+### Usage
 
-1.  Ensure **ViGEmBus** is installed.
-2.  Run the proxy executable:
+1.  **Install ViGEmBus driver** (if not already installed):
+    - Download from [ViGEmBus Community Fork](https://github.com/nefarius/ViGEmBus/releases)
+    - Run installer as administrator
+    - Restart your computer
+
+2.  **(Optional) Install HidHide driver** for device masking:
+    - Download from [HidHide Releases](https://github.com/nefarius/HidHide/releases)
+    - Run installer as administrator
+    - Restart your computer
+
+3.  **Run the proxy executable** as administrator:
     ```bash
     .\build\xinput_dinput_proxy.exe
     ```
-3.  The dashboard will launch, showing connected controllers.
-4.  Connect your physical controller. The proxy will automatically detect it and create a corresponding virtual device.
-5.  Press `Ctrl+C` in the terminal to stop the service and exit.
 
-> **Note:** If ViGEmBus is not installed, the application will run in **Input Test Mode**. You will see "WARNING: Failed to initialize virtual device emulator" but input detection will still work.
-> 
-> **Note:** For games to pick up the *virtual* controller instead of the physical one, you may need to use tools like `HidHide` to hide the physical device from the game.
+4.  The interactive dashboard will launch, showing:
+    - Connected controllers with real-time status
+    - Input test panel for verifying button presses
+    - Performance metrics (FPS, latency)
+    - Configuration controls
 
-## 📊 Performance
+5.  **Test your controller inputs:**
+    - Press buttons to see them light up green
+    - Successfully tested buttons turn blue (checklist style)
+    - Verify all buttons, triggers, and analog sticks work
+
+6.  **Configure settings** using the interactive controls:
+    - Enable/disable translation layer
+    - Toggle HidHide device hiding
+    - Configure SOCD cleaning method
+    - Enable debouncing if needed
+    - Test rumble/vibration
+
+7.  Connect your physical controller. The proxy will automatically detect it and create a corresponding virtual device.
+
+8.  Launch your game. The game should detect the virtual controller.
+
+9.  Press `Ctrl+C` or use the "Exit Application" button to stop the service.
+
+> **Tip:** All settings are saved to `config.ini` and persist between sessions. You can also edit the config file directly.
+
+> **Note:** If ViGEmBus is not installed, the application will run in **Input Test Mode**. You can still test controller inputs but virtual devices won't be created.
+
+> **Game Compatibility:** For games to pick up the *virtual* controller instead of the physical one, enable HidHide in the dashboard. The proxy handles device hiding automatically.
+
+## Performance
 
 | Metric | Target | Actual |
 | :--- | :--- | :--- |
@@ -110,7 +156,7 @@ ninja
 | **CPU Usage** | < 1% | **< 0.5%** (Ryzen 5 5600X) |
 | **Memory Footprint** | Low | **~12 MB** |
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Please follow the [Google C++ Style Guide](https://google.github.io/styleguide/cppguide.html) where possible.
 
@@ -120,12 +166,45 @@ Contributions are welcome! Please follow the [Google C++ Style Guide](https://go
 4.  Push to the Branch (`git push origin feat/AmazingFeature`)
 5.  Open a Pull Request
 
-## 📄 License
+### Development Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/VishaL6i9/xinput-dinput-proxy.git
+cd xinput-dinput-proxy
+
+# Build the project
+.\build.ps1
+
+# Run tests
+cd build
+ctest --output-on-failure
+```
+
+## Documentation
+
+- [Configuration Reference](config.ini) - All available settings and their defaults
+- Settings are automatically saved and loaded from `config.ini` in the executable directory
+- Logs are saved with timestamps (e.g., `2026-02-07-173551.log`) for crash debugging
+
+## Known Issues
+
+1. **ViGEmBus Dependency**: The original ViGEmBus driver was retired in 2023. This project requires the community-maintained fork. Future versions may migrate to alternative solutions.
+
+2. **Administrator Privileges**: Required for ViGEmBus and HidHide driver access. The application will not function properly without elevated permissions.
+
+3. **Controller Limit**: Maximum 4 XInput controllers supported (Windows limitation). Additional HID devices can be detected but won't be assigned to XInput slots.
+
+4. **Bluetooth Latency**: Bluetooth controllers have higher latency than USB. For competitive gaming, USB connection is recommended.
+
+5. **Multiple HID Interfaces**: Xbox controllers expose multiple HID interfaces (IG_01, IG_02, etc.). The proxy now correctly handles this and only creates one virtual device per physical controller.
+
+## License
 
 Distributed under the MIT License. See `LICENSE` for more information.
 
 ---
 
 <div align="center">
-    <b>Built with ❤️ for the Gaming Community</b>
+    <b>Built as a personal side project.</b>
 </div>
