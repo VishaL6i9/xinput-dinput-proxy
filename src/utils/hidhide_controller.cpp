@@ -44,6 +44,11 @@ bool HidHideController::connect() {
     m_connected = true;
     Logger::log("Successfully connected to HidHide driver");
     
+    // Add ourselves to the whitelist first (required for inverse mode)
+    if (!addSelfToWhitelist()) {
+        Logger::log("WARNING: Could not add application to HidHide whitelist. Device hiding may not work in inverse mode.");
+    }
+    
     // Log IOCTL codes for debugging
     std::stringstream ss;
     ss << "Debug: IOCTL_GET_BLACKLIST = 0x" << std::hex << IOCTL_GET_BLACKLIST;
@@ -90,7 +95,7 @@ bool HidHideController::connect() {
     if (result) {
         Logger::log("Debug: HidHide inverse mode: " + std::string(inverse ? "ENABLED (whitelist mode)" : "DISABLED (blacklist mode)"));
         if (inverse) {
-            Logger::log("WARNING: HidHide is in whitelist mode. This application needs to be added to the whitelist in HidHide Configuration Client.");
+            Logger::log("INFO: HidHide is in whitelist mode. Application has been added to whitelist.");
         }
     } else {
         DWORD err = GetLastError();
@@ -132,66 +137,72 @@ bool HidHideController::addDeviceToBlacklist(const std::wstring& devicePath) {
         return false;
     }
 
-    // First get the current blacklist
+    // Extract Device Instance ID from the full path
+    std::wstring deviceInstanceId = devicePath;
+    
+    // Remove \\?\ prefix if present
+    if (deviceInstanceId.find(L"\\\\?\\") == 0) {
+        deviceInstanceId = deviceInstanceId.substr(4);
+    }
+    
+    // Remove the GUID suffix (everything after the last #)
+    size_t lastHash = deviceInstanceId.rfind(L'#');
+    if (lastHash != std::wstring::npos) {
+        deviceInstanceId = deviceInstanceId.substr(0, lastHash);
+    }
+    
+    // Replace # with \ to get proper instance ID format
+    for (auto& c : deviceInstanceId) {
+        if (c == L'#') c = L'\\';
+    }
+    
+    Logger::log("Debug: Device path: " + Logger::wstringToNarrow(devicePath));
+    Logger::log("Debug: Device instance ID: " + Logger::wstringToNarrow(deviceInstanceId));
+    
+    // Get current blacklist
     std::vector<std::wstring> currentList = getBlacklist();
     
-    // If getBlacklist failed (HidHide not working), silently fail
-    static bool hidHideFailed = false;
-    if (currentList.empty() && !hidHideFailed) {
-        // First failure - getBlacklist already logged the error
-        hidHideFailed = true;
-        return false;
-    }
-    if (hidHideFailed) {
-        return false; // Silently fail on subsequent attempts
+    // Check if already in list
+    if (std::find(currentList.begin(), currentList.end(), deviceInstanceId) != currentList.end()) {
+        return true;
     }
     
-    // Check if device is already in the list
-    if (std::find(currentList.begin(), currentList.end(), devicePath) != currentList.end()) {
-        // Device already in blacklist, no need to log
-        return true; // Already added
-    }
-
-    // Add the new device to the list
-    currentList.push_back(devicePath);
-
-    // Prepare the buffer for the new list
-    // HidHide expects a multi-string format: count (ULONG) followed by null-terminated wide strings
-    size_t totalSize = sizeof(ULONG); // Count
-    for (const auto& path : currentList) {
-        totalSize += (path.length() + 1) * sizeof(WCHAR); // Include null terminator
-    }
-    totalSize += sizeof(WCHAR); // Extra null terminator at the end
-
-    std::vector<BYTE> buffer(totalSize, 0);
-    ULONG* countPtr = reinterpret_cast<ULONG*>(buffer.data());
-    *countPtr = static_cast<ULONG>(currentList.size());
-
-    WCHAR* pathPtr = reinterpret_cast<WCHAR*>(buffer.data() + sizeof(ULONG));
-    for (const auto& path : currentList) {
-        wcscpy_s(pathPtr, path.length() + 1, path.c_str());
-        pathPtr += path.length() + 1;
-    }
-    // pathPtr now points to the final null terminator (already zeroed)
-
-    Logger::log("Debug: Attempting to set blacklist with " + std::to_string(currentList.size()) + " devices");
-    Logger::log("Debug: Buffer size: " + std::to_string(buffer.size()) + " bytes");
+    // Add to list
+    currentList.push_back(deviceInstanceId);
     
-    bool result = sendIoctl(IOCTL_SET_BLACKLIST, buffer.data(), static_cast<DWORD>(buffer.size()));
+    // Build double-null-terminated string buffer (DS4Windows style)
+    std::vector<BYTE> buffer;
+    for (const auto& id : currentList) {
+        // Add string bytes
+        const BYTE* strBytes = reinterpret_cast<const BYTE*>(id.c_str());
+        size_t strSize = (id.length() + 1) * sizeof(WCHAR); // Include null terminator
+        buffer.insert(buffer.end(), strBytes, strBytes + strSize);
+    }
+    // Add final null terminator
+    WCHAR finalNull = L'\0';
+    const BYTE* nullBytes = reinterpret_cast<const BYTE*>(&finalNull);
+    buffer.insert(buffer.end(), nullBytes, nullBytes + sizeof(WCHAR));
     
-    if (!result) {
-        DWORD err = GetLastError();
-        // Only log error once per session
-        static bool setBlacklistErrorLogged = false;
-        if (!setBlacklistErrorLogged) {
-            Logger::error("Failed to add device to HidHide blacklist. Error: " + std::to_string(err));
-            Logger::error("Device path: " + Logger::wstringToNarrow(devicePath));
-            setBlacklistErrorLogged = true;
-        }
+    DWORD bytesReturned = 0;
+    bool result = DeviceIoControl(
+        m_driverHandle,
+        IOCTL_SET_BLACKLIST,
+        buffer.data(), static_cast<DWORD>(buffer.size()),
+        nullptr, 0,
+        &bytesReturned,
+        NULL
+    ) == TRUE;
+    
+    if (result) {
+        Logger::log("Successfully added to HidHide blacklist: " + Logger::wstringToNarrow(deviceInstanceId));
     } else {
-        Logger::log("Successfully added device to HidHide blacklist: " + Logger::wstringToNarrow(devicePath));
+        static bool errorLogged = false;
+        if (!errorLogged) {
+            Logger::log("Failed to add to HidHide blacklist (Error: " + std::to_string(GetLastError()) + ")");
+            errorLogged = true;
+        }
     }
-
+    
     return result;
 }
 
@@ -262,60 +273,56 @@ std::vector<std::wstring> HidHideController::getBlacklist() {
         return {};
     }
 
-    // Try to get the list with a buffer
-    std::vector<BYTE> sizeBuffer(4096); // Start with 4KB buffer
-    
+    // DS4Windows two-step approach:
+    // Step 1: Call with NULL buffer to get required size
     DWORD bytesReturned = 0;
     BOOL result = DeviceIoControl(
         m_driverHandle,
         IOCTL_GET_BLACKLIST,
         nullptr, 0,
-        sizeBuffer.data(), static_cast<DWORD>(sizeBuffer.size()),
+        nullptr, 0,
         &bytesReturned,
         NULL
     );
 
+    if (bytesReturned == 0) {
+        // Empty list or error
+        return {};
+    }
+
+    // Step 2: Allocate buffer and get actual data
+    std::vector<BYTE> buffer(bytesReturned);
+    DWORD actualBytes = 0;
+    
+    result = DeviceIoControl(
+        m_driverHandle,
+        IOCTL_GET_BLACKLIST,
+        nullptr, 0,
+        buffer.data(), bytesReturned,
+        &actualBytes,
+        NULL
+    );
+
     if (result != TRUE) {
-        DWORD error = GetLastError();
         static bool errorLogged = false;
         if (!errorLogged) {
-            Logger::error("Failed to get HidHide blacklist. Error: " + std::to_string(error));
-            Logger::error("HidHide may not be properly installed or configured. Device hiding will not work.");
-            Logger::log("Debug: Driver handle valid: " + std::string(m_driverHandle != INVALID_HANDLE_VALUE ? "YES" : "NO"));
-            Logger::log("Debug: IOCTL code: 0x" + std::to_string(IOCTL_GET_BLACKLIST));
-            Logger::log("Debug: Buffer size: " + std::to_string(sizeBuffer.size()));
+            Logger::log("HidHide: Could not read blacklist. Error: " + std::to_string(GetLastError()));
             errorLogged = true;
         }
         return {};
     }
 
-    // Parse the returned data
+    // Parse double-null-terminated wide string list
     std::vector<std::wstring> devices;
-    if (bytesReturned >= sizeof(ULONG)) {
-        ULONG* countPtr = reinterpret_cast<ULONG*>(sizeBuffer.data());
-        ULONG count = *countPtr;
+    if (actualBytes >= sizeof(WCHAR) * 2) {
+        WCHAR* ptr = reinterpret_cast<WCHAR*>(buffer.data());
         
-        if (count > 0) {
-            WCHAR* pathPtr = reinterpret_cast<WCHAR*>(sizeBuffer.data() + sizeof(ULONG));
-            
-            for (ULONG i = 0; i < count; ++i) {
-                // Find the end of the current string (null terminator)
-                WCHAR* currentPos = pathPtr;
-                
-                // Calculate the length of the string
-                size_t len = 0;
-                while (currentPos[len] != L'\0') {
-                    len++;
-                }
-                
-                // Create the string from the character array
-                std::wstring path(currentPos, len);
-                
-                devices.push_back(path);
-                
-                // Move pointer past the current string and its null terminator
-                pathPtr = currentPos + len + 1;
+        while (*ptr != L'\0' && (reinterpret_cast<BYTE*>(ptr) - buffer.data()) < actualBytes) {
+            std::wstring deviceId = ptr;
+            if (!deviceId.empty()) {
+                devices.push_back(deviceId);
             }
+            ptr += deviceId.length() + 1;
         }
     }
 
@@ -617,4 +624,31 @@ std::wstring HidHideController::getDeviceInstanceId(const std::wstring& devicePa
         }
     }
     return L"";
+}
+
+
+bool HidHideController::addSelfToWhitelist() {
+    // Get the full path to our executable in DOS device notation
+    wchar_t exePath[MAX_PATH];
+    if (GetModuleFileNameW(NULL, exePath, MAX_PATH) == 0) {
+        Logger::error("Failed to get executable path");
+        return false;
+    }
+    
+    // Convert to DOS device path format
+    // C:\Path\To\File.exe -> \Device\HarddiskVolumeX\Path\To\File.exe
+    wchar_t dosDevicePath[MAX_PATH];
+    if (QueryDosDeviceW(L"C:", dosDevicePath, MAX_PATH) == 0) {
+        // If conversion fails, try using the regular path
+        Logger::log("Warning: Could not convert to DOS device path, using regular path");
+        return addProcessToWhitelist(exePath);
+    }
+    
+    // Build the full DOS device path
+    std::wstring fullDosPath = dosDevicePath;
+    fullDosPath += (exePath + 2); // Skip "C:" part
+    
+    Logger::log("Adding application to HidHide whitelist: " + Logger::wstringToNarrow(fullDosPath));
+    
+    return addProcessToWhitelist(fullDosPath);
 }

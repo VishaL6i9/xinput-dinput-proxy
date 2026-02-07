@@ -39,7 +39,7 @@ public:
     void setViGEmAvailable(bool available);
     
     // Load settings from config
-    void loadSettings(bool translationEnabled, bool hidHideEnabled, bool socdEnabled, int socdMethod, bool debouncingEnabled);
+    void loadSettings(bool translationEnabled, bool hidHideEnabled, bool socdEnabled, int socdMethod, bool debouncingEnabled, int targetType);
     
     // Interactive State Getters
     bool isTranslationEnabled() const { std::lock_guard<std::mutex> lock(m_statsMutex); return m_translationEnabled; }

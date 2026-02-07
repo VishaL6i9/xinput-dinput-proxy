@@ -85,12 +85,26 @@ int main() {
     dashboard->setTranslationLayer(translationLayer.get());
     
     // Load dashboard settings from config
+    // Calculate target type: 0=Xbox360, 1=DS4, 2=Combined
+    int targetType = 0; // Default to Xbox 360
+    bool xiToDi = config.getBool("xinput_to_dinput", true);
+    bool diToXi = config.getBool("dinput_to_xinput", false);
+    
+    if (xiToDi && diToXi) {
+        targetType = 2; // Combined
+    } else if (xiToDi) {
+        targetType = 1; // DualShock 4
+    } else if (diToXi) {
+        targetType = 0; // Xbox 360
+    }
+    
     dashboard->loadSettings(
         config.getBool("translation_enabled", true),
         config.getBool("hidhide_enabled", true),
         config.getBool("socd_enabled", true),
         config.getInt("socd_method", 2),
-        config.getBool("debouncing_enabled", false)
+        config.getBool("debouncing_enabled", false),
+        targetType
     );
 
     // Initialize modules
@@ -176,30 +190,31 @@ int main() {
 
                 // 2. Dynamic Virtual Device Creation (ONLY IF TRANSLATION IS ENABLED)
                 if (dashboard->isTranslationEnabled()) {
-                    // Xbox 360 Emulation
+                    // DualShock 4 Emulation (XInput -> DInput)
                     if (translationLayer->isXInputToDInputEnabled()) {
-                        if (activeVirtualXInputDevices.find(state.userId) == activeVirtualXInputDevices.end()) {
-                            std::string sourceName = Logger::wstringToNarrow(state.productName);
-                            if (sourceName.empty()) sourceName = "Xbox 360 Controller (User " + std::to_string(state.userId) + ")";
-                            
-                            int virtualId = virtualDeviceEmulator->createVirtualDevice(TranslatedState::TARGET_XINPUT, state.userId, sourceName);
-                            if (virtualId >= 0) {
-                                activeVirtualXInputDevices[state.userId] = virtualId;
-                                std::cout << "Created virtual Xbox 360 for " << sourceName << std::endl;
-                            }
-                        }
-                    }
-                    
-                    // DS4/DInput Emulation
-                    if (translationLayer->isDInputToXInputEnabled()) {
                         if (activeVirtualDInputDevices.find(state.userId) == activeVirtualDInputDevices.end()) {
                             std::string sourceName = Logger::wstringToNarrow(state.productName);
-                            if (sourceName.empty()) sourceName = "HID Device";
+                            if (sourceName.empty()) sourceName = "Xbox 360 Controller (User " + std::to_string(state.userId) + ")";
                             
                             int virtualId = virtualDeviceEmulator->createVirtualDevice(TranslatedState::TARGET_DINPUT, state.userId, sourceName);
                             if (virtualId >= 0) {
                                 activeVirtualDInputDevices[state.userId] = virtualId;
                                 std::cout << "Created virtual DS4 for " << sourceName << std::endl;
+                                Logger::log("DEBUG: Created virtual DS4 (type=TARGET_DINPUT=1) for userId=" + std::to_string(state.userId));
+                            }
+                        }
+                    }
+                    
+                    // Xbox 360 Emulation (DInput -> XInput)
+                    if (translationLayer->isDInputToXInputEnabled()) {
+                        if (activeVirtualXInputDevices.find(state.userId) == activeVirtualXInputDevices.end()) {
+                            std::string sourceName = Logger::wstringToNarrow(state.productName);
+                            if (sourceName.empty()) sourceName = "HID Device";
+                            
+                            int virtualId = virtualDeviceEmulator->createVirtualDevice(TranslatedState::TARGET_XINPUT, state.userId, sourceName);
+                            if (virtualId >= 0) {
+                                activeVirtualXInputDevices[state.userId] = virtualId;
+                                std::cout << "Created virtual Xbox 360 for " << sourceName << std::endl;
                             }
                         }
                     }

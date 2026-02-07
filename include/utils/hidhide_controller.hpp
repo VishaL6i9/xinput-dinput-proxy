@@ -11,7 +11,7 @@
 #include <string>
 
 // Define the actual HidHide IOCTL codes based on the official HidHide driver
-// HidHide uses FILE_DEVICE_UNKNOWN (0x22) with custom function codes
+// HidHide v1.5 uses these specific IOCTL codes
 #ifndef FILE_DEVICE_UNKNOWN
 #define FILE_DEVICE_UNKNOWN 0x00000022
 #endif
@@ -24,16 +24,17 @@
 #define FILE_ANY_ACCESS 0x0000
 #endif
 
-// Official HidHide IOCTL codes (from HidHide v1.2+)
-// These use FILE_ANY_ACCESS instead of FILE_READ_DATA
-#define IOCTL_GET_WHITELIST   CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_SET_WHITELIST   CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_GET_BLACKLIST   CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_SET_BLACKLIST   CTL_CODE(FILE_DEVICE_UNKNOWN, 0x803, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_GET_ACTIVE      CTL_CODE(FILE_DEVICE_UNKNOWN, 0x804, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_SET_ACTIVE      CTL_CODE(FILE_DEVICE_UNKNOWN, 0x805, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_GET_WLINVERSE   CTL_CODE(FILE_DEVICE_UNKNOWN, 0x806, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_SET_WLINVERSE   CTL_CODE(FILE_DEVICE_UNKNOWN, 0x807, METHOD_BUFFERED, FILE_ANY_ACCESS)
+// HidHide IOCTL codes
+// Note: Using DS4Windows-compatible codes (older HidHide API)
+// These work with HidHide v1.x
+#define IOCTL_GET_WHITELIST   0x80016000
+#define IOCTL_SET_WHITELIST   0x80016004
+#define IOCTL_GET_BLACKLIST   0x80016008
+#define IOCTL_SET_BLACKLIST   0x8001600C
+#define IOCTL_GET_ACTIVE      0x80016010
+#define IOCTL_SET_ACTIVE      0x80016014
+#define IOCTL_GET_WLINVERSE   0x80016018
+#define IOCTL_SET_WLINVERSE   0x8001601C
 
 // Structure for device instance path list
 // We'll handle this as raw bytes in the implementation
@@ -57,6 +58,7 @@ public:
     bool removeProcessFromWhitelist(const std::wstring& processPath);
     bool clearWhitelist();
     std::vector<std::wstring> getWhitelist();
+    bool addSelfToWhitelist(); // Add current application to whitelist
 
     // Driver activation
     bool setActive(bool active);

@@ -89,13 +89,14 @@ void Dashboard::setViGEmAvailable(bool available) {
     m_screen.Post(ftxui::Event::Custom);
 }
 
-void Dashboard::loadSettings(bool translationEnabled, bool hidHideEnabled, bool socdEnabled, int socdMethod, bool debouncingEnabled) {
+void Dashboard::loadSettings(bool translationEnabled, bool hidHideEnabled, bool socdEnabled, int socdMethod, bool debouncingEnabled, int targetType) {
     std::lock_guard<std::mutex> lock(m_statsMutex);
     m_translationEnabled = translationEnabled;
     m_hidHideEnabled = hidHideEnabled;
     m_socdEnabled = socdEnabled;
     m_selectedSocd = socdMethod;
     m_debouncingEnabled = debouncingEnabled;
+    m_selectedTargetType = targetType;
 }
 
 void Dashboard::initializeUI() {
@@ -205,8 +206,12 @@ void Dashboard::updateUI() {
         m_translationLayer->setSOCDMethod(m_selectedSocd);
         m_translationLayer->setDebouncingEnabled(m_debouncingEnabled);
         
-        bool xiToDi = (m_selectedTargetType == 0 || m_selectedTargetType == 2);
-        bool diToXi = (m_selectedTargetType == 1 || m_selectedTargetType == 2);
+        // Target type determines which translation direction is enabled:
+        // 0 = Xbox 360: Enable DInput->XInput (convert generic HID to Xbox)
+        // 1 = DualShock 4: Enable XInput->DInput (convert Xbox to DS4)
+        // 2 = Combined: Enable both directions
+        bool xiToDi = (m_selectedTargetType == 1 || m_selectedTargetType == 2);
+        bool diToXi = (m_selectedTargetType == 0 || m_selectedTargetType == 2);
         m_translationLayer->setXInputToDInputMapping(xiToDi);
         m_translationLayer->setDInputToXInputMapping(diToXi);
     }
@@ -281,26 +286,26 @@ ftxui::Element Dashboard::renderRumblePanel() {
             ftxui::text("Vibration/Rumble Test:") | ftxui::color(ftxui::Color::Yellow),
             ftxui::hbox({
                 ftxui::text("Intensity: " + std::to_string(intensityPercent) + "% "),
-                m_mainContainer->ChildAt(8)->Render() | ftxui::flex, // rumble_slider
+                m_mainContainer->ChildAt(9)->Render() | ftxui::flex, // rumble_slider
             }),
             ftxui::hbox({
-                m_mainContainer->ChildAt(9)->Render(),  // rumble_btn (START/STOP)
+                m_mainContainer->ChildAt(10)->Render(),  // rumble_btn (START/STOP)
                 ftxui::text(" "),
-                m_mainContainer->ChildAt(10)->Render(), // preset_25_btn
+                m_mainContainer->ChildAt(11)->Render(), // preset_25_btn
                 ftxui::text(" "),
-                m_mainContainer->ChildAt(11)->Render(), // preset_50_btn
+                m_mainContainer->ChildAt(12)->Render(), // preset_50_btn
                 ftxui::text(" "),
-                m_mainContainer->ChildAt(12)->Render(), // preset_75_btn
+                m_mainContainer->ChildAt(13)->Render(), // preset_75_btn
                 ftxui::text(" "),
-                m_mainContainer->ChildAt(13)->Render(), // preset_100_btn
+                m_mainContainer->ChildAt(14)->Render(), // preset_100_btn
             }),
             ftxui::separator(),
             ftxui::text("Device Management:") | ftxui::color(ftxui::Color::Yellow),
-            m_mainContainer->ChildAt(15)->Render(), // refresh_devices_btn
+            m_mainContainer->ChildAt(16)->Render(), // refresh_devices_btn
             ftxui::separator(),
             ftxui::text("Status: " + m_statusMessage) | ftxui::dim,
             ftxui::filler(),
-            m_mainContainer->ChildAt(16)->Render(), // exit_btn
+            m_mainContainer->ChildAt(17)->Render(), // exit_btn
         }) | ftxui::border
     });
 }
@@ -308,8 +313,14 @@ ftxui::Element Dashboard::renderRumblePanel() {
 ftxui::Element Dashboard::renderControllersPanel() {
     std::lock_guard<std::mutex> lock(m_statsMutex);
     
+    // Count only connected controllers
+    int connectedCount = 0;
+    for (const auto& state : m_controllerStates) {
+        if (state.isConnected) connectedCount++;
+    }
+    
     std::stringstream ss;
-    ss << "Connected Controllers: " << m_controllerStates.size();
+    ss << "Connected Controllers: " << connectedCount;
     
     ftxui::Elements children;
     children.push_back(ftxui::text(ss.str()));

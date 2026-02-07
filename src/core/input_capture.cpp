@@ -220,9 +220,18 @@ bool InputCapture::initializeHID() {
                 }
                 
                 if (!found && isXInput) {
-                    // Extract base device ID (without interface suffix like &IG_01, &IG_02, etc.)
+                    // Extract VID/PID only (before the backslash and &IG_ suffix)
                     // Example: HID\VID_045E&PID_028E&IG_01\8&F746FFA&0&0000 -> HID\VID_045E&PID_028E
+                    // Example: HID\VID_045E&PID_028E&IG_03\3&29329EE&0&0000 -> HID\VID_045E&PID_028E
                     std::wstring baseDeviceId = actualInstanceId;
+                    
+                    // First, get everything before the backslash (removes serial number)
+                    size_t backslashPos = baseDeviceId.find(L'\\');
+                    if (backslashPos != std::wstring::npos) {
+                        baseDeviceId = baseDeviceId.substr(0, backslashPos);
+                    }
+                    
+                    // Then remove &IG_XX suffix
                     size_t igPos = baseDeviceId.find(L"&IG_");
                     if (igPos != std::wstring::npos) {
                         baseDeviceId = baseDeviceId.substr(0, igPos);
@@ -233,10 +242,18 @@ bool InputCapture::initializeHID() {
                     for (const auto& state : m_controllerStates) {
                         if (state.userId >= 0 && !state.deviceInstanceId.empty()) {
                             std::wstring existingBaseId = state.deviceInstanceId;
+                            
+                            // Extract VID/PID from existing device
+                            size_t existingBackslashPos = existingBaseId.find(L'\\');
+                            if (existingBackslashPos != std::wstring::npos) {
+                                existingBaseId = existingBaseId.substr(0, existingBackslashPos);
+                            }
+                            
                             size_t existingIgPos = existingBaseId.find(L"&IG_");
                             if (existingIgPos != std::wstring::npos) {
                                 existingBaseId = existingBaseId.substr(0, existingIgPos);
                             }
+                            
                             if (existingBaseId == baseDeviceId) {
                                 alreadyAssigned = true;
                                 found = true; // Mark as found so we don't add it again
@@ -427,23 +444,34 @@ void InputCapture::pollXInputControllers() {
         {
             std::lock_guard<std::mutex> lock(m_statesMutex);
             if (i < m_controllerStates.size()) {
-                // Log first successful poll for debugging
-                static bool firstPollLogged[XUSER_MAX_COUNT] = {false, false, false, false};
-                if (result == ERROR_SUCCESS && !firstPollLogged[i]) {
-                    Logger::log("InputCapture: First successful XInput poll for User " + std::to_string(i) + 
-                               ", PacketNumber: " + std::to_string(state.dwPacketNumber));
-                    firstPollLogged[i] = true;
+                // Only process XInput data if this slot has been matched to a physical HID device
+                // This prevents duplicate interfaces from the same controller filling multiple slots
+                if (!m_controllerStates[i].deviceInstanceId.empty()) {
+                    // Log first successful poll for debugging
+                    static bool firstPollLogged[XUSER_MAX_COUNT] = {false, false, false, false};
+                    if (result == ERROR_SUCCESS && !firstPollLogged[i]) {
+                        Logger::log("InputCapture: First successful XInput poll for User " + std::to_string(i) + 
+                                   ", PacketNumber: " + std::to_string(state.dwPacketNumber));
+                        firstPollLogged[i] = true;
+                    }
+                    
+                    m_controllerStates[i].xinputState = state;
+                    m_controllerStates[i].xinputPacketNumber = state.dwPacketNumber;
+                    
+                    // Mark as connected only if XInput poll succeeds AND device is matched
+                    if (result == ERROR_SUCCESS) {
+                        m_controllerStates[i].isConnected = true;
+                    } else {
+                        m_controllerStates[i].isConnected = false;
+                        m_controllerStates[i].deviceInstanceId = L""; // Clear so it can be re-matched
+                    }
+                    m_controllerStates[i].lastError = result;
+                } else {
+                    // No HID device matched to this XInput slot - mark as disconnected
+                    m_controllerStates[i].isConnected = false;
+                    m_controllerStates[i].lastError = ERROR_DEVICE_NOT_CONNECTED;
                 }
                 
-                m_controllerStates[i].xinputState = state;
-                m_controllerStates[i].xinputPacketNumber = state.dwPacketNumber;
-                // Only mark as connected if it's already verified as a physical device
-                // If it was connected but XInput reports failure, mark as disconnected
-                if (result != ERROR_SUCCESS) {
-                    m_controllerStates[i].isConnected = false;
-                    m_controllerStates[i].deviceInstanceId = L""; // Clear so it can be re-matched
-                }
-                m_controllerStates[i].lastError = result;
                 m_controllerStates[i].timestamp = TimingUtils::getPerformanceCounter();
             }
         }
