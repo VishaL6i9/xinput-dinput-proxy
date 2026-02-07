@@ -37,3 +37,12 @@ Thumbs.db
 # Crash dumps
 *.dmp
 *.mdmp
+
+DS4Windows-jay/
+
+# Utility and test files (not part of main project)
+cleanup_vigem.cpp
+hidhide_test.cpp
+
+# Incomplete/future features
+include/utils/device_profile_loader.hpp
