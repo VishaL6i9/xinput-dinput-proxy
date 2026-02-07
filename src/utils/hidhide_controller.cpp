@@ -44,11 +44,6 @@ bool HidHideController::connect() {
     m_connected = true;
     Logger::log("Successfully connected to HidHide driver");
     
-    // Add ourselves to the whitelist first (required for inverse mode)
-    if (!addSelfToWhitelist()) {
-        Logger::log("WARNING: Could not add application to HidHide whitelist. Device hiding may not work in inverse mode.");
-    }
-    
     // Log IOCTL codes for debugging
     std::stringstream ss;
     ss << "Debug: IOCTL_GET_BLACKLIST = 0x" << std::hex << IOCTL_GET_BLACKLIST;
@@ -95,7 +90,12 @@ bool HidHideController::connect() {
     if (result) {
         Logger::log("Debug: HidHide inverse mode: " + std::string(inverse ? "ENABLED (whitelist mode)" : "DISABLED (blacklist mode)"));
         if (inverse) {
-            Logger::log("INFO: HidHide is in whitelist mode. Application has been added to whitelist.");
+            Logger::log("INFO: HidHide is in whitelist mode. Attempting to add application to whitelist...");
+            if (addSelfToWhitelist()) {
+                Logger::log("INFO: Successfully added application to HidHide whitelist.");
+            } else {
+                Logger::log("WARNING: Could not add application to HidHide whitelist. Device hiding may not work.");
+            }
         }
     } else {
         DWORD err = GetLastError();
@@ -628,18 +628,20 @@ std::wstring HidHideController::getDeviceInstanceId(const std::wstring& devicePa
 
 
 bool HidHideController::addSelfToWhitelist() {
-    // Get the full path to our executable in DOS device notation
+    // Get the full path to our executable
     wchar_t exePath[MAX_PATH];
     if (GetModuleFileNameW(NULL, exePath, MAX_PATH) == 0) {
         Logger::error("Failed to get executable path");
         return false;
     }
     
-    // Convert to DOS device path format
+    // Try to convert to DOS device path format
     // C:\Path\To\File.exe -> \Device\HarddiskVolumeX\Path\To\File.exe
-    wchar_t dosDevicePath[MAX_PATH];
-    if (QueryDosDeviceW(L"C:", dosDevicePath, MAX_PATH) == 0) {
-        // If conversion fails, try using the regular path
+    wchar_t dosDevicePath[MAX_PATH] = {0};
+    DWORD result = QueryDosDeviceW(L"C:", dosDevicePath, MAX_PATH);
+    
+    if (result == 0 || result >= MAX_PATH) {
+        // If conversion fails, use the regular path
         Logger::log("Warning: Could not convert to DOS device path, using regular path");
         return addProcessToWhitelist(exePath);
     }
