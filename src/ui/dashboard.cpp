@@ -21,6 +21,7 @@ Dashboard::Dashboard()
       m_rumbleIntensity(0.0f),
       m_rumbleTesting(false),
       m_lastRumbleTesting(false),
+      m_refreshRequested(false),
       m_screen(ftxui::ScreenInteractive::Fullscreen()) {
     TimingUtils::initialize();
     m_lastUpdateTime = TimingUtils::getPerformanceCounter();
@@ -146,7 +147,14 @@ void Dashboard::initializeUI() {
         }
     });
 
-    // 5. Container Assembly
+    // 5. Device Management
+    auto refresh_devices_btn = Button("Refresh Devices", [&] {
+        std::lock_guard<std::mutex> lock(m_statsMutex);
+        m_refreshRequested = true;
+        m_statusMessage = "Device refresh requested...";
+    });
+
+    // 6. Container Assembly
     m_mainContainer = Container::Vertical({
         socd_toggle,
         socd_radio,
@@ -160,6 +168,8 @@ void Dashboard::initializeUI() {
         rumble_slider,
         rumble_btn,
         max_rumble_btn,
+        Renderer([&] { return separator(); }),
+        refresh_devices_btn,
         Button("Exit Application", [&] { stop(); })
     });
 }
@@ -250,9 +260,12 @@ ftxui::Element Dashboard::renderRumblePanel() {
                 m_mainContainer->ChildAt(10)->Render(), // max_rumble_btn
             }),
             ftxui::separator(),
+            ftxui::text("Device Management:") | ftxui::color(ftxui::Color::Yellow),
+            m_mainContainer->ChildAt(12)->Render(), // refresh_devices_btn
+            ftxui::separator(),
             ftxui::text("Status: " + m_statusMessage) | ftxui::dim,
             ftxui::filler(),
-            m_mainContainer->ChildAt(11)->Render(), // exit_btn (index shift)
+            m_mainContainer->ChildAt(13)->Render(), // exit_btn
         }) | ftxui::border
     });
 }

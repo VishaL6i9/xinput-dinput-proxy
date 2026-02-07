@@ -228,9 +228,28 @@ int main() {
         // Update dashboard with current stats
         dashboard->updateStats(frameCount++, deltaTime, inputStates);
 
-        // Periodic device Refresh (every 5 seconds)
+        // Adaptive device refresh based on connected controller count
         static uint64_t lastRefreshTime = currentTime;
-        if (TimingUtils::counterToMicroseconds(currentTime - lastRefreshTime) > 5000000) {
+        int connectedCount = 0;
+        for (const auto& state : inputStates) {
+            if (state.isConnected) connectedCount++;
+        }
+        
+        // Determine refresh interval based on controller count
+        double refreshIntervalMicroseconds;
+        if (connectedCount == 0) {
+            refreshIntervalMicroseconds = 5000000.0; // 5 seconds when no controllers
+        } else {
+            refreshIntervalMicroseconds = 30000000.0; // 30 seconds when controllers connected
+        }
+        
+        // Check if manual refresh was requested
+        if (dashboard->isRefreshRequested()) {
+            inputCapture->refreshDevices();
+            lastRefreshTime = currentTime;
+            dashboard->clearRefreshRequest();
+            Logger::log("Manual device refresh triggered");
+        } else if (TimingUtils::counterToMicroseconds(currentTime - lastRefreshTime) > refreshIntervalMicroseconds) {
             inputCapture->refreshDevices();
             lastRefreshTime = currentTime;
         }

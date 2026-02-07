@@ -45,6 +45,10 @@ public:
     bool isTranslationEnabled() const { std::lock_guard<std::mutex> lock(m_statsMutex); return m_translationEnabled; }
     bool isHidHideEnabled() const { std::lock_guard<std::mutex> lock(m_statsMutex); return m_hidHideEnabled; }
     
+    // Device refresh control
+    bool isRefreshRequested() const { std::lock_guard<std::mutex> lock(m_statsMutex); return m_refreshRequested; }
+    void clearRefreshRequest() { std::lock_guard<std::mutex> lock(m_statsMutex); m_refreshRequested = false; }
+    
 private:
     void initializeUI();
     void updateUI();
@@ -84,6 +88,7 @@ private:
     bool m_rumbleTesting;
     bool m_lastRumbleTesting;
     std::string m_rumbleBtnLabel;
+    bool m_refreshRequested;
     
     // Timing
     uint64_t m_lastUpdateTime;
