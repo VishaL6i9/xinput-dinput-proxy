@@ -45,6 +45,8 @@ add_executable(${PROJECT_NAME}
     src/ui/dashboard.cpp
     src/utils/timing.cpp
     src/utils/threading.cpp
+    src/utils/hidhide_controller.cpp
+    src/utils/config_manager.cpp
 )
 
 # Link libraries
@@ -83,3 +85,49 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
 set_target_properties(${PROJECT_NAME} PROPERTIES
     LINK_FLAGS "/SUBSYSTEM:CONSOLE"
 )
+
+# Enforce Administrator privileges on Windows with MSVC
+if(MSVC)
+    set_property(TARGET ${PROJECT_NAME} APPEND_STRING PROPERTY 
+        LINK_FLAGS " /MANIFESTUAC:\"level='requireAdministrator' uiAccess='false'\"")
+endif()
+
+# Copy config.ini template to build directory if it doesn't exist
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_SOURCE_DIR}/config.ini
+        $<TARGET_FILE_DIR:${PROJECT_NAME}>/config.ini
+    COMMENT "Copying config.ini template to build directory"
+)
+
+# Testing
+option(BUILD_TESTS "Build unit tests" ON)
+
+if(BUILD_TESTS)
+    enable_testing()
+    
+    # Test for Config Manager
+    add_executable(test_config_manager
+        tests/test_config_manager.cpp
+        src/utils/config_manager.cpp
+    )
+    target_include_directories(test_config_manager PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    add_test(NAME ConfigManagerTest COMMAND test_config_manager)
+    
+    # Test for Translation Layer
+    add_executable(test_translation_layer
+        tests/test_translation_layer.cpp
+        src/core/translation_layer.cpp
+        src/utils/timing.cpp
+    )
+    target_include_directories(test_translation_layer PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(test_translation_layer
+        hid.lib
+        winmm.lib
+    )
+    add_test(NAME TranslationLayerTest COMMAND test_translation_layer)
+endif()
