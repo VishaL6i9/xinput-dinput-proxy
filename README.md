@@ -41,6 +41,8 @@ Unlike basic wrappers, this project parses raw HID reports directly from the Win
     *   Real-time performance metrics (FPS, latency, frame time)
     *   Interactive configuration controls (SOCD, debouncing, HidHide, translation toggle)
     *   Rumble/vibration testing with intensity control
+    *   Manual device refresh button for hot-plug detection
+*   **Adaptive Device Scanning:** Smart scanning intervals (5s when no controllers, 30s when connected) to reduce overhead
 *   **Configuration System:** INI-based settings with runtime updates and persistence
 *   **Crash-Resistant Logging:** Continuous auto-save logging that survives crashes for debugging
 *   **HidHide Integration:** Automatic physical device hiding to prevent double-input issues
@@ -134,14 +136,17 @@ ninja
     - Configure SOCD cleaning method
     - Enable debouncing if needed
     - Test rumble/vibration
+    - Use "Refresh Devices" button to manually scan for new controllers
 
-7.  Connect your physical controller. The proxy will automatically detect it and create a corresponding virtual device.
+7.  Connect your physical controller. The proxy will automatically detect it (within 5-30 seconds) or click "Refresh Devices" for immediate detection.
 
 8.  Launch your game. The game should detect the virtual controller.
 
 9.  Press `Ctrl+C` or use the "Exit Application" button to stop the service.
 
 > **Tip:** All settings are saved to `config.ini` and persist between sessions. You can also edit the config file directly.
+
+> **Hot-Plug Detection:** The proxy scans for new devices every 5 seconds when no controllers are connected, and every 30 seconds when controllers are active. Use the "Refresh Devices" button for immediate detection.
 
 > **Note:** If ViGEmBus is not installed, the application will run in **Input Test Mode**. You can still test controller inputs but virtual devices won't be created.
 
