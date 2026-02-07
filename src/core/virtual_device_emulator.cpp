@@ -1,25 +1,41 @@
 #include "core/virtual_device_emulator.hpp"
 #include "utils/timing.hpp"
+#include "utils/hidhide_controller.hpp"
 
 #include <thread>
 #include <sstream>
 #include <iostream>
 #include <iomanip>
 
-// Include ViGEmBus headers
-extern "C" {
-#pragma warning(push)
-#pragma warning(disable: 4828)
-#include "ViGEmClient.h"
-#pragma warning(pop)
+// ViGEmClient.h is already included in the header with proper warning suppression
+
+VirtualDeviceEmulator* VirtualDeviceEmulator::m_instance = nullptr;
+
+void CALLBACK VirtualDeviceEmulator::x360Notification(
+    PVIGEM_CLIENT client,
+    PVIGEM_TARGET target,
+    BYTE largeMotor,
+    BYTE smallMotor,
+    BYTE ledNumber,
+    LPVOID userData
+) {
+    if (m_instance && m_instance->m_rumbleCallback) {
+        int userId = static_cast<int>(reinterpret_cast<uintptr_t>(userData));
+        float left = static_cast<float>(largeMotor) / 255.0f;
+        float right = static_cast<float>(smallMotor) / 255.0f;
+        m_instance->m_rumbleCallback(userId, left, right);
+    }
 }
 
-VirtualDeviceEmulator::VirtualDeviceEmulator() 
-    : m_initialized(false), 
+VirtualDeviceEmulator::VirtualDeviceEmulator()
+    : m_initialized(false),
       m_running(false),
       m_vigemClient(nullptr),
+      m_hidHideController(nullptr),
+      m_hidHideEnabled(false),
       m_rumbleEnabled(true),
       m_rumbleIntensity(1.0f) {
+    m_instance = this;
 }
 
 VirtualDeviceEmulator::~VirtualDeviceEmulator() {
@@ -133,27 +149,30 @@ bool VirtualDeviceEmulator::sendInput(const std::vector<TranslatedState>& transl
     return true;
 }
 
-bool VirtualDeviceEmulator::createVirtualDevice(TranslatedState::TargetType type, int userId) {
+int VirtualDeviceEmulator::createVirtualDevice(TranslatedState::TargetType type, int userId, const std::string& sourceName) {
     if (!m_initialized) {
-        return false;
+        return -1;
     }
     
     std::lock_guard<std::mutex> lock(m_devicesMutex);
     
     // Find an available ID
     int newId = 0;
-    for (const auto& device : m_virtualDevices) {
-        if (device.id >= newId) {
-            newId = device.id + 1;
-        }
+    while (std::any_of(m_virtualDevices.begin(), m_virtualDevices.end(), [newId](const VirtualDevice& d) { return d.id == newId; })) {
+        newId++;
     }
     
     VirtualDevice newDevice;
     newDevice.id = newId;
     newDevice.type = type;
     newDevice.userId = userId;
-    newDevice.connected = false;
-    newDevice.lastUpdate = 0;
+    newDevice.sourceName = sourceName;
+    newDevice.connected = true;
+    newDevice.lastUpdate = TimingUtils::getPerformanceCounter();
+    newDevice.target = nullptr; // Will be set by specialized creator
+    
+    // Add to list first so specialized creators can find it
+    m_virtualDevices.push_back(newDevice);
     
     bool success = false;
     if (type == TranslatedState::TARGET_XINPUT) {
@@ -163,18 +182,17 @@ bool VirtualDeviceEmulator::createVirtualDevice(TranslatedState::TargetType type
     }
     
     if (success) {
-        newDevice.connected = true;
-        m_virtualDevices.push_back(newDevice);
-        
         // Call callback if set
         if (m_deviceCallback) {
             m_deviceCallback(newId, true);
         }
-        
-        return true;
+        return newId;
+    } else {
+        // Remove failed device
+        m_virtualDevices.erase(std::remove_if(m_virtualDevices.begin(), m_virtualDevices.end(), 
+            [newId](const VirtualDevice& d) { return d.id == newId; }), m_virtualDevices.end());
+        return -1;
     }
-    
-    return false;
 }
 
 bool VirtualDeviceEmulator::destroyVirtualDevice(int deviceId) {
@@ -227,14 +245,37 @@ int VirtualDeviceEmulator::getVirtualDeviceCount() const {
     return static_cast<int>(m_virtualDevices.size());
 }
 
+
+
 void VirtualDeviceEmulator::setRumbleEnabled(bool enabled) {
     m_rumbleEnabled = enabled;
+    
+    // If testing manually, trigger the callback for all active virtual devices
+    if (m_rumbleCallback) {
+        std::lock_guard<std::mutex> lock(m_devicesMutex);
+        for (const auto& device : m_virtualDevices) {
+            float power = enabled ? m_rumbleIntensity : 0.0f;
+            m_rumbleCallback(device.userId, power, power);
+        }
+    }
 }
 
 void VirtualDeviceEmulator::setRumbleIntensity(float intensity) {
     if (intensity < 0.0f) intensity = 0.0f;
     if (intensity > 1.0f) intensity = 1.0f;
     m_rumbleIntensity = intensity;
+    
+    // If testing is currently active, update intensity immediately
+    if (m_rumbleEnabled && m_rumbleCallback) {
+        std::lock_guard<std::mutex> lock(m_devicesMutex);
+        for (const auto& device : m_virtualDevices) {
+            m_rumbleCallback(device.userId, intensity, intensity);
+        }
+    }
+}
+
+void VirtualDeviceEmulator::setRumbleCallback(RumbleCallback callback) {
+    m_rumbleCallback = callback;
 }
 
 void VirtualDeviceEmulator::setDeviceConnectCallback(DeviceCallback callback) {
@@ -268,9 +309,10 @@ bool VirtualDeviceEmulator::initializeInputInjection() {
 }
 
 bool VirtualDeviceEmulator::initializeVirtualDevices() {
-    // Initialize virtual devices based on configuration
-    // For now, create a default virtual device
-    return createVirtualDevice(TranslatedState::TARGET_XINPUT, 0);
+    // Initializing virtual devices is now handled dynamically by the main loop
+    // when physical controllers are detected. At startup, we just need to confirm
+    // that we are ready to create them.
+    return true;
 }
 
 bool VirtualDeviceEmulator::createVirtualXInputDevice(int userId) {
@@ -295,16 +337,28 @@ bool VirtualDeviceEmulator::createVirtualXInputDevice(int userId) {
         return false;
     }
 
-    // Store the target in our device mapping for this userId
-    VirtualDevice newDevice;
-    newDevice.id = userId; // Use userId as ID for simplicity
-    newDevice.type = TranslatedState::TARGET_XINPUT;
-    newDevice.userId = userId;
-    newDevice.connected = true;
-    newDevice.lastUpdate = TimingUtils::getPerformanceCounter();
-    newDevice.target = x360Target;
-    
-    m_virtualDevices.push_back(newDevice);
+    // Register rumble notification
+    vigem_target_x360_register_notification(
+        static_cast<PVIGEM_CLIENT>(m_vigemClient),
+        x360Target,
+        VirtualDeviceEmulator::x360Notification,
+        reinterpret_cast<LPVOID>(static_cast<uintptr_t>(userId))
+    );
+
+    // Find the device created in createVirtualDevice and update its target.
+    // NOTE: m_devicesMutex is ALREADY HELD by createVirtualDevice calling us.
+    auto it = std::find_if(m_virtualDevices.begin(), m_virtualDevices.end(),
+                           [userId](const VirtualDevice& device) {
+                               return device.userId == userId && device.type == TranslatedState::TARGET_XINPUT && device.target == nullptr;
+                           });
+    if (it != m_virtualDevices.end()) {
+        it->target = x360Target;
+    } else {
+        Logger::error("VirtualDeviceEmulator: Could not find VirtualDevice record to assign XInput target.");
+        vigem_target_remove(static_cast<PVIGEM_CLIENT>(m_vigemClient), x360Target);
+        vigem_target_free(x360Target);
+        return false;
+    }
 
     return true;
 }
@@ -330,16 +384,20 @@ bool VirtualDeviceEmulator::createVirtualDInputDevice(int userId) {
         return false;
     }
 
-    // Store the target in our device mapping for this userId
-    VirtualDevice newDevice;
-    newDevice.id = userId; // Use userId as ID for simplicity
-    newDevice.type = TranslatedState::TARGET_DINPUT;
-    newDevice.userId = userId;
-    newDevice.connected = true;
-    newDevice.lastUpdate = TimingUtils::getPerformanceCounter();
-    newDevice.target = ds4Target;
-    
-    m_virtualDevices.push_back(newDevice);
+    // Find the device created in createVirtualDevice and update its target.
+    // NOTE: m_devicesMutex is ALREADY HELD by createVirtualDevice calling us.
+    auto it = std::find_if(m_virtualDevices.begin(), m_virtualDevices.end(),
+                           [userId](const VirtualDevice& device) {
+                               return device.userId == userId && device.type == TranslatedState::TARGET_DINPUT && device.target == nullptr;
+                           });
+    if (it != m_virtualDevices.end()) {
+        it->target = ds4Target;
+    } else {
+        Logger::error("VirtualDeviceEmulator: Could not find VirtualDevice record to assign DS4 target.");
+        vigem_target_remove(static_cast<PVIGEM_CLIENT>(m_vigemClient), ds4Target);
+        vigem_target_free(ds4Target);
+        return false;
+    }
 
     return true;
 }
@@ -406,9 +464,88 @@ bool VirtualDeviceEmulator::sendToVirtualDInputDevice(int userId, const Translat
     report.bThumbLY = longToByte(state.lY);
     report.bThumbRX = longToByte(state.lRx);
     report.bThumbRY = longToByte(state.lRy);
-    
+
     // Submit the report to ViGEmBus
     VIGEM_ERROR error = vigem_target_ds4_update(static_cast<PVIGEM_CLIENT>(m_vigemClient), static_cast<PVIGEM_TARGET>(it->target), report);
-    
+
     return VIGEM_SUCCESS(error);
+}
+
+void VirtualDeviceEmulator::enableHidHideIntegration(bool enable) {
+    if (m_hidHideEnabled == enable) return;
+
+    m_hidHideEnabled = enable;
+    if (enable) {
+        if (!m_hidHideController) {
+            m_hidHideController = std::make_unique<HidHideController>();
+        }
+        connectHidHide();
+    } else {
+        if (m_hidHideController) {
+            disconnectHidHide();
+        }
+    }
+}
+
+bool VirtualDeviceEmulator::connectHidHide() {
+    if (!m_hidHideEnabled || !m_hidHideController) {
+        return false;
+    }
+    
+    bool result = m_hidHideController->connect();
+    if (result) {
+        Logger::log("Successfully connected to HidHide driver");
+    } else {
+        Logger::error("Failed to connect to HidHide driver. Is HidHide installed and running?");
+    }
+    return result;
+}
+
+void VirtualDeviceEmulator::disconnectHidHide() {
+    if (m_hidHideController) {
+        m_hidHideController->disconnect();
+        Logger::log("Disconnected from HidHide driver");
+    }
+}
+
+bool VirtualDeviceEmulator::addPhysicalDeviceToHidHideBlacklist(const std::wstring& deviceInstanceId) {
+    if (!m_hidHideEnabled || !m_hidHideController) {
+        return false;
+    }
+    
+    bool result = m_hidHideController->addDeviceToBlacklist(deviceInstanceId);
+    
+    // Convert wide string to narrow string for logging explicitly to avoid C4244
+    std::string narrowDeviceId;
+    for (wchar_t wc : deviceInstanceId) {
+        narrowDeviceId += static_cast<char>(wc);
+    }
+
+    if (result) {
+        Logger::log("Added device to HidHide blacklist: " + narrowDeviceId);
+    } else {
+        Logger::error("Failed to add device to HidHide blacklist: " + narrowDeviceId);
+    }
+    return result;
+}
+
+bool VirtualDeviceEmulator::removePhysicalDeviceFromHidHideBlacklist(const std::wstring& deviceInstanceId) {
+    if (!m_hidHideEnabled || !m_hidHideController) {
+        return false;
+    }
+    
+    bool result = m_hidHideController->removeDeviceFromBlacklist(deviceInstanceId);
+    
+    // Convert wide string to narrow string for logging explicitly to avoid C4244
+    std::string narrowDeviceId;
+    for (wchar_t wc : deviceInstanceId) {
+        narrowDeviceId += static_cast<char>(wc);
+    }
+
+    if (result) {
+        Logger::log("Removed device from HidHide blacklist: " + narrowDeviceId);
+    } else {
+        Logger::error("Failed to remove device from HidHide blacklist: " + narrowDeviceId);
+    }
+    return result;
 }

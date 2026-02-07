@@ -3,6 +3,7 @@
 #include <vector>
 #include <cstdint>
 #include <algorithm>
+#include <array>
 #include "core/input_capture.hpp"
 
 // Structure to hold translated input state
@@ -42,6 +43,8 @@ public:
     // Configure translation mappings
     void setXInputToDInputMapping(bool enabled);
     void setDInputToXInputMapping(bool enabled);
+    bool isXInputToDInputEnabled() const { return m_xinputToDInputEnabled; }
+    bool isDInputToXInputEnabled() const { return m_dinputToXInputEnabled; }
     
     // Set SOCD cleaning options
     void setSOCDCleaningEnabled(bool enabled);
@@ -54,23 +57,34 @@ public:
     // Translate standardized state to XInput format
     XINPUT_STATE translateToXInput(const TranslatedState& state);
     
-    // Translate standardized state to DirectInput format
-    // Note: DirectInput state representation would be more complex
-    // This is a simplified placeholder
+    // Comprehensive DirectInput state (similar to DIJOYSTATE2)
     struct DInputState {
+        LONG lX;            // X-axis (usually Left Stick X)
+        LONG lY;            // Y-axis (usually Left Stick Y)
+        LONG lZ;            // Z-axis (usually Left Trigger or Right Stick X)
+        LONG lRx;           // R-axis (usually Right Stick X)
+        LONG lRy;           // U-axis (usually Right Stick Y)
+        LONG lRz;           // V-axis (usually Right Trigger)
+        LONG rglSlider[2];  // Extra sliders
+        DWORD rgdwPOV[4];   // POV hats (in hundredths of degrees, -1 for centered)
+        BYTE rgbButtons[128]; // Max 128 buttons
+        
+        // Legacy fields for our internal simplified mapping compatibility
         WORD wButtons;
         BYTE bLeftTrigger;
         BYTE bRightTrigger;
-        LONG lX;
-        LONG lY;
-        LONG lZ;
-        LONG lRx;
-        LONG lRy;
-        LONG lRz;
     };
     DInputState translateToDInput(const TranslatedState& state);
 
 private:
+    struct HIDMappingProfile {
+        std::wstring productName;
+        std::unordered_map<USAGE, WORD> buttonMap;
+        std::unordered_map<USAGE, int> axisMap; // Index into gamepad axes
+    };
+    std::unordered_map<std::wstring, HIDMappingProfile> m_deviceProfiles;
+    
+    void initializeProfiles();
     bool m_xinputToDInputEnabled;
     bool m_dinputToXInputEnabled;
     bool m_socdCleaningEnabled;
@@ -78,8 +92,9 @@ private:
     bool m_debouncingEnabled;
     int m_debounceIntervalMs;
 
-    // Internal state for debouncing
-    std::vector<uint64_t> m_lastButtonChangeTime;
+    // Internal state for debouncing (fixed size to prevent unbounded growth)
+    static constexpr size_t MAX_CONTROLLERS = 16;
+    std::array<uint64_t, MAX_CONTROLLERS> m_lastButtonChangeTime;
 
     // Apply SOCD cleaning to a gamepad state
     void applySOCDControl(TranslatedState::GamepadState& gamepad);

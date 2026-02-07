@@ -4,15 +4,41 @@
 #include <algorithm>
 #include <cmath>
 
+// Include Windows headers for USAGE and other types
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <hidusage.h>
+
 TranslationLayer::TranslationLayer() 
     : m_xinputToDInputEnabled(true), 
       m_dinputToXInputEnabled(true),
       m_socdCleaningEnabled(true),
-      m_socdMethod(0), // Last Win by default
-      m_debouncingEnabled(true),
-      m_debounceIntervalMs(50) {  // 50ms debounce by default
+      m_socdMethod(2), // Neutral
+      m_debouncingEnabled(false),
+      m_debounceIntervalMs(10),
+      m_lastButtonChangeTime{} {  // Initialize array to zeros
+    initializeProfiles();
 }
 
+void TranslationLayer::initializeProfiles() {
+    // DS4 / DualSense Profile
+    HIDMappingProfile ds4;
+    ds4.productName = L"Wireless Controller"; // Sony's standard name
+    ds4.buttonMap[1] = XINPUT_GAMEPAD_X; // Square
+    ds4.buttonMap[2] = XINPUT_GAMEPAD_A; // Cross
+    ds4.buttonMap[3] = XINPUT_GAMEPAD_B; // Circle
+    ds4.buttonMap[4] = XINPUT_GAMEPAD_Y; // Triangle
+    ds4.buttonMap[5] = XINPUT_GAMEPAD_LEFT_SHOULDER;
+    ds4.buttonMap[6] = XINPUT_GAMEPAD_RIGHT_SHOULDER;
+    ds4.buttonMap[9] = XINPUT_GAMEPAD_BACK;   // Share
+    ds4.buttonMap[10] = XINPUT_GAMEPAD_START; // Options
+    ds4.buttonMap[11] = XINPUT_GAMEPAD_LEFT_THUMB;
+    ds4.buttonMap[12] = XINPUT_GAMEPAD_RIGHT_THUMB;
+    
+    m_deviceProfiles[ds4.productName] = ds4;
+}
 std::vector<TranslatedState> TranslationLayer::translate(const std::vector<ControllerState>& inputStates) {
     std::vector<TranslatedState> translatedStates;
     
@@ -143,9 +169,10 @@ void TranslationLayer::applySOCDControl(TranslatedState::GamepadState& gamepad) 
 }
 
 bool TranslationLayer::applyDebouncing(int userId, WORD currentButtons, WORD& cleanedButtons) {
-    // Ensure we have enough space in the timestamp vector
-    if (userId >= static_cast<int>(m_lastButtonChangeTime.size())) {
-        m_lastButtonChangeTime.resize(userId + 1, 0);
+    // Bounds check for fixed-size array
+    if (userId < 0 || userId >= static_cast<int>(MAX_CONTROLLERS)) {
+        cleanedButtons = currentButtons;
+        return true; // Allow input for out-of-bounds IDs
     }
     
     // Calculate time threshold in performance counter ticks
@@ -187,24 +214,75 @@ TranslatedState TranslationLayer::convertXInputToStandard(const ControllerState&
 
 TranslatedState TranslationLayer::convertHIDToStandard(const ControllerState& inputState) {
     TranslatedState state{};
-    state.sourceUserId = -1; // HID devices don't have a user ID like XInput
+    state.sourceUserId = -1;
     state.isXInputSource = false;
     state.timestamp = inputState.timestamp;
     
-    // Map HID state to our standard gamepad format
-    // This is a simplified mapping - actual implementation would need 
-    // device-specific mapping based on the HID report descriptor
-    state.gamepad.wButtons = inputState.gamepad.wButtons;
-    state.gamepad.bLeftTrigger = inputState.gamepad.bLeftTrigger;
-    state.gamepad.bRightTrigger = inputState.gamepad.bRightTrigger;
-    state.gamepad.sThumbLX = inputState.gamepad.sThumbLX;
-    state.gamepad.sThumbLY = inputState.gamepad.sThumbLY;
-    state.gamepad.sThumbRX = inputState.gamepad.sThumbRX;
-    state.gamepad.sThumbRY = inputState.gamepad.sThumbRY;
-    
-    // Set target type based on configuration
+    // Default values
+    state.gamepad.wButtons = 0;
+    state.gamepad.bLeftTrigger = 0;
+    state.gamepad.bRightTrigger = 0;
+    state.gamepad.sThumbLX = 0;
+    state.gamepad.sThumbLY = 0;
+    state.gamepad.sThumbRX = 0;
+    state.gamepad.sThumbRY = 0;
+
+    // 1. Check for device-specific profile
+    auto it = m_deviceProfiles.find(inputState.productName);
+    if (it != m_deviceProfiles.end()) {
+        const auto& profile = it->second;
+        
+        // Map Buttons
+        for (USAGE usage : inputState.m_activeButtons) {
+            auto btnIt = profile.buttonMap.find(usage);
+            if (btnIt != profile.buttonMap.end()) {
+                state.gamepad.wButtons |= btnIt->second;
+            }
+        }
+        
+        // Map Axes (Specific logic for DS4 etc.)
+        if (inputState.productName == L"Wireless Controller") {
+            // DS4 axes: 0x30=LX, 0x31=LY, 0x32=RX, 0x35=RY (usually)
+            // Values are 0-255
+            for (const auto& [usage, value] : inputState.m_hidValues) {
+                switch (usage) {
+                    case 0x30: state.gamepad.sThumbLX = static_cast<SHORT>((value - 128) * 256); break;
+                    case 0x31: state.gamepad.sThumbLY = static_cast<SHORT>((127 - value) * 256); break;
+                    case 0x32: state.gamepad.sThumbRX = static_cast<SHORT>((value - 128) * 256); break;
+                    case 0x35: state.gamepad.sThumbRY = static_cast<SHORT>((127 - value) * 256); break;
+                }
+            }
+        }
+    } else {
+        // 2. Fallback to robust generic mapping
+        // Standardize Buttons (1-based index to standard bits)
+        for (USAGE usage : inputState.m_activeButtons) {
+            if (usage >= 1 && usage <= 16) {
+                // Map common button indices to something sensible
+                if (usage == 1) state.gamepad.wButtons |= XINPUT_GAMEPAD_A;
+                else if (usage == 2) state.gamepad.wButtons |= XINPUT_GAMEPAD_B;
+                else if (usage == 3) state.gamepad.wButtons |= XINPUT_GAMEPAD_X;
+                else if (usage == 4) state.gamepad.wButtons |= XINPUT_GAMEPAD_Y;
+            }
+        }
+        
+        // Standardize Axes (Generic Desktop Page 0x01)
+        for (const auto& [usage, value] : inputState.m_hidValues) {
+            // value is likely 0-65535 or 0-1023 etc. 
+            // We'll normalize based on the reported caps if we had them here, 
+            // but for now let's assume standard 0-65535 for generic.
+            switch (usage) {
+                case 0x30: state.gamepad.sThumbLX = static_cast<SHORT>(value - 32768); break;
+                case 0x31: state.gamepad.sThumbLY = static_cast<SHORT>(32767 - value); break;
+                case 0x32: state.gamepad.sThumbRX = static_cast<SHORT>(value - 32768); break;
+                case 0x35: state.gamepad.sThumbRY = static_cast<SHORT>(32767 - value); break;
+                case 0x33: state.gamepad.bLeftTrigger = static_cast<BYTE>(value / 256); break;
+                case 0x34: state.gamepad.bRightTrigger = static_cast<BYTE>(value / 256); break;
+            }
+        }
+    }
+
     state.targetType = m_dinputToXInputEnabled ? TranslatedState::TARGET_XINPUT : TranslatedState::TARGET_DINPUT;
-    
     return state;
 }
 
@@ -226,31 +304,52 @@ XINPUT_STATE TranslationLayer::translateToXInput(const TranslatedState& state) {
 TranslationLayer::DInputState TranslationLayer::translateToDInput(const TranslatedState& state) {
     DInputState dinputState{};
     
-    // Map XInput-style buttons to DirectInput-style state
-    // This is a simplified mapping - actual implementation would be more complex
-    dinputState.wButtons = state.gamepad.wButtons;
-    dinputState.bLeftTrigger = state.gamepad.bLeftTrigger;
-    dinputState.bRightTrigger = state.gamepad.bRightTrigger;
-    
-    // Map thumbsticks to DirectInput axes
-    // Use scaling helpers to convert from SHORT to LONG safely
+    // 1. Map Thumbsticks to X, Y, Rx, Ry
     dinputState.lX = scaleShortToLong(state.gamepad.sThumbLX);
     dinputState.lY = scaleShortToLong(state.gamepad.sThumbLY);
-    
-    // Map triggers to Z/Rz axes
-    // Triggers are 0-255, we want to map this to 0-65535 (LONG full range) or -32768 to 32767
-    // Standard XInput trigger behavior is 0 (released) to 255 (pressed)
-    // Let's map 0->0 and 255->65535 for DInput axes if they are unsigned, or center them.
-    // However, most DInput implementations expect centered axes. 
-    // For trigger-as-axis, let's map 0-255 => 0-65535 (Unsigned) or -32768-32767.
-    // 
-    // Implementing standard mapping: 0 -> -32768 (min), 255 -> 32767 (max)
-    dinputState.lZ = static_cast<LONG>(state.gamepad.bLeftTrigger * 257) - 32768; 
-    
     dinputState.lRx = scaleShortToLong(state.gamepad.sThumbRX);
     dinputState.lRy = scaleShortToLong(state.gamepad.sThumbRY);
     
+    // 2. Map Triggers to Z and Rz
+    // XInput ranges: 0 to 255
+    // DInput ranges: -32768 to 32767
+    dinputState.lZ = static_cast<LONG>(state.gamepad.bLeftTrigger * 257) - 32768;
     dinputState.lRz = static_cast<LONG>(state.gamepad.bRightTrigger * 257) - 32768;
+    
+    // 3. Map Buttons
+    // XInput buttons (WORD) -> DInput buttons (128-byte array)
+    if (state.gamepad.wButtons & XINPUT_GAMEPAD_A)              dinputState.rgbButtons[0] = 0x80;
+    if (state.gamepad.wButtons & XINPUT_GAMEPAD_B)              dinputState.rgbButtons[1] = 0x80;
+    if (state.gamepad.wButtons & XINPUT_GAMEPAD_X)              dinputState.rgbButtons[2] = 0x80;
+    if (state.gamepad.wButtons & XINPUT_GAMEPAD_Y)              dinputState.rgbButtons[3] = 0x80;
+    if (state.gamepad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER)   dinputState.rgbButtons[4] = 0x80;
+    if (state.gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER)  dinputState.rgbButtons[5] = 0x80;
+    if (state.gamepad.wButtons & XINPUT_GAMEPAD_BACK)           dinputState.rgbButtons[6] = 0x80;
+    if (state.gamepad.wButtons & XINPUT_GAMEPAD_START)          dinputState.rgbButtons[7] = 0x80;
+    if (state.gamepad.wButtons & XINPUT_GAMEPAD_LEFT_THUMB)     dinputState.rgbButtons[8] = 0x80;
+    if (state.gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB)    dinputState.rgbButtons[9] = 0x80;
+    
+    // 4. Map D-Pad to POV
+    // POV is in hundredths of degrees: North=0, East=9000, South=18000, West=27000, Release=-1
+    dinputState.rgdwPOV[0] = static_cast<DWORD>(-1);
+    if (state.gamepad.wButtons & XINPUT_GAMEPAD_DPAD_UP) {
+        if (state.gamepad.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) dinputState.rgdwPOV[0] = 4500;
+        else if (state.gamepad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT) dinputState.rgdwPOV[0] = 31500;
+        else dinputState.rgdwPOV[0] = 0;
+    } else if (state.gamepad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN) {
+        if (state.gamepad.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) dinputState.rgdwPOV[0] = 13500;
+        else if (state.gamepad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT) dinputState.rgdwPOV[0] = 22500;
+        else dinputState.rgdwPOV[0] = 18000;
+    } else if (state.gamepad.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) {
+        dinputState.rgdwPOV[0] = 9000;
+    } else if (state.gamepad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT) {
+        dinputState.rgdwPOV[0] = 27000;
+    }
+    
+    // Backward compatibility fields
+    dinputState.wButtons = state.gamepad.wButtons;
+    dinputState.bLeftTrigger = state.gamepad.bLeftTrigger;
+    dinputState.bRightTrigger = state.gamepad.bRightTrigger;
     
     return dinputState;
 }
