@@ -410,7 +410,12 @@ bool VirtualDeviceEmulator::sendToVirtualXInputDevice(int userId, const XINPUT_S
                               return device.userId == userId && device.type == TranslatedState::TARGET_XINPUT;
                           });
     
-    if (it == m_virtualDevices.end() || !it->target) {
+    if (it == m_virtualDevices.end() || !it->target || !it->connected) {
+        return false;
+    }
+    
+    // Verify ViGEm client is still valid
+    if (!m_vigemClient) {
         return false;
     }
     
@@ -430,7 +435,14 @@ bool VirtualDeviceEmulator::sendToVirtualXInputDevice(int userId, const XINPUT_S
     // Submit the report to ViGEmBus
     VIGEM_ERROR error = vigem_target_x360_update(static_cast<PVIGEM_CLIENT>(m_vigemClient), static_cast<PVIGEM_TARGET>(it->target), report);
     
-    return VIGEM_SUCCESS(error);
+    // If update fails, mark device as disconnected to prevent further crashes
+    if (!VIGEM_SUCCESS(error)) {
+        it->connected = false;
+        Logger::log("WARNING: X360 update failed for userId " + std::to_string(userId) + ", error: 0x" + std::to_string(error));
+        return false;
+    }
+    
+    return true;
 }
 
 bool VirtualDeviceEmulator::sendToVirtualDInputDevice(int userId, const TranslationLayer::DInputState& state) {
@@ -441,7 +453,12 @@ bool VirtualDeviceEmulator::sendToVirtualDInputDevice(int userId, const Translat
                               return device.userId == userId && device.type == TranslatedState::TARGET_DINPUT;
                           });
     
-    if (it == m_virtualDevices.end() || !it->target) {
+    if (it == m_virtualDevices.end() || !it->target || !it->connected) {
+        return false;
+    }
+    
+    // Verify ViGEm client is still valid
+    if (!m_vigemClient) {
         return false;
     }
     
@@ -449,26 +466,76 @@ bool VirtualDeviceEmulator::sendToVirtualDInputDevice(int userId, const Translat
     DS4_REPORT report;
     DS4_REPORT_INIT(&report);
     
-    // Map the DInputState to DS4_REPORT
-    report.wButtons = state.wButtons;
+    // Map XInput buttons to DS4 buttons using proper DS4 button flags
+    USHORT ds4Buttons = 0;
+    if (state.wButtons & XINPUT_GAMEPAD_BACK) ds4Buttons |= DS4_BUTTON_SHARE;
+    if (state.wButtons & XINPUT_GAMEPAD_START) ds4Buttons |= DS4_BUTTON_OPTIONS;
+    if (state.wButtons & XINPUT_GAMEPAD_LEFT_THUMB) ds4Buttons |= DS4_BUTTON_THUMB_LEFT;
+    if (state.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB) ds4Buttons |= DS4_BUTTON_THUMB_RIGHT;
+    if (state.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) ds4Buttons |= DS4_BUTTON_SHOULDER_LEFT;
+    if (state.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) ds4Buttons |= DS4_BUTTON_SHOULDER_RIGHT;
+    if (state.wButtons & XINPUT_GAMEPAD_A) ds4Buttons |= DS4_BUTTON_CROSS;
+    if (state.wButtons & XINPUT_GAMEPAD_B) ds4Buttons |= DS4_BUTTON_CIRCLE;
+    if (state.wButtons & XINPUT_GAMEPAD_X) ds4Buttons |= DS4_BUTTON_SQUARE;
+    if (state.wButtons & XINPUT_GAMEPAD_Y) ds4Buttons |= DS4_BUTTON_TRIANGLE;
+    
+    report.wButtons = ds4Buttons;
     report.bTriggerL = state.bLeftTrigger;
     report.bTriggerR = state.bRightTrigger;
     
+    // Set trigger buttons based on trigger values
+    if (state.bLeftTrigger > 0) report.wButtons |= DS4_BUTTON_TRIGGER_LEFT;
+    if (state.bRightTrigger > 0) report.wButtons |= DS4_BUTTON_TRIGGER_RIGHT;
+    
+    // Map D-Pad using DS4_SET_DPAD macro
+    if (state.wButtons & XINPUT_GAMEPAD_DPAD_UP && state.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) {
+        DS4_SET_DPAD(&report, DS4_BUTTON_DPAD_NORTHEAST);
+    } else if (state.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT && state.wButtons & XINPUT_GAMEPAD_DPAD_DOWN) {
+        DS4_SET_DPAD(&report, DS4_BUTTON_DPAD_SOUTHEAST);
+    } else if (state.wButtons & XINPUT_GAMEPAD_DPAD_DOWN && state.wButtons & XINPUT_GAMEPAD_DPAD_LEFT) {
+        DS4_SET_DPAD(&report, DS4_BUTTON_DPAD_SOUTHWEST);
+    } else if (state.wButtons & XINPUT_GAMEPAD_DPAD_LEFT && state.wButtons & XINPUT_GAMEPAD_DPAD_UP) {
+        DS4_SET_DPAD(&report, DS4_BUTTON_DPAD_NORTHWEST);
+    } else if (state.wButtons & XINPUT_GAMEPAD_DPAD_UP) {
+        DS4_SET_DPAD(&report, DS4_BUTTON_DPAD_NORTH);
+    } else if (state.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) {
+        DS4_SET_DPAD(&report, DS4_BUTTON_DPAD_EAST);
+    } else if (state.wButtons & XINPUT_GAMEPAD_DPAD_DOWN) {
+        DS4_SET_DPAD(&report, DS4_BUTTON_DPAD_SOUTH);
+    } else if (state.wButtons & XINPUT_GAMEPAD_DPAD_LEFT) {
+        DS4_SET_DPAD(&report, DS4_BUTTON_DPAD_WEST);
+    } else {
+        DS4_SET_DPAD(&report, DS4_BUTTON_DPAD_NONE);
+    }
+    
     // DS4 report uses BYTE (0-255) for sticks, not SHORT (-32768 to 32767)
     // We need to normalize our LONG input (likely -32768..32767 usually) to 0..255
+    // DS4 Y-axis convention: 0 = up, 255 = down (inverted from XInput where positive = up)
     auto longToByte = [](LONG val) -> BYTE {
         return static_cast<BYTE>(TranslationLayer::normalizeLong(val) * 127.5f + 127.5f);
     };
+    
+    auto longToByteInverted = [](LONG val) -> BYTE {
+        // Invert the Y-axis: positive becomes low value (up), negative becomes high value (down)
+        return static_cast<BYTE>(127.5f - TranslationLayer::normalizeLong(val) * 127.5f);
+    };
 
     report.bThumbLX = longToByte(state.lX);
-    report.bThumbLY = longToByte(state.lY);
+    report.bThumbLY = longToByteInverted(state.lY);  // Invert Y-axis
     report.bThumbRX = longToByte(state.lRx);
-    report.bThumbRY = longToByte(state.lRy);
+    report.bThumbRY = longToByteInverted(state.lRy); // Invert Y-axis
 
     // Submit the report to ViGEmBus
     VIGEM_ERROR error = vigem_target_ds4_update(static_cast<PVIGEM_CLIENT>(m_vigemClient), static_cast<PVIGEM_TARGET>(it->target), report);
 
-    return VIGEM_SUCCESS(error);
+    // If update fails, mark device as disconnected to prevent further crashes
+    if (!VIGEM_SUCCESS(error)) {
+        it->connected = false;
+        Logger::log("WARNING: DS4 update failed for userId " + std::to_string(userId) + ", error: 0x" + std::to_string(error));
+        return false;
+    }
+
+    return true;
 }
 
 void VirtualDeviceEmulator::enableHidHideIntegration(bool enable) {
