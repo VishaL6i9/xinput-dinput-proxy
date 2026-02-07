@@ -243,13 +243,15 @@ TranslatedState TranslationLayer::convertHIDToStandard(const ControllerState& in
         // Map Axes (Specific logic for DS4 etc.)
         if (inputState.productName == L"Wireless Controller") {
             // DS4 axes: 0x30=LX, 0x31=LY, 0x32=RX, 0x35=RY (usually)
-            // Values are 0-255
+            // Values are 0-255, center at 128
+            // XInput convention: positive Y = up, negative Y = down
+            // DS4 HID: 0 = up, 255 = down (inverted from XInput)
             for (const auto& [usage, value] : inputState.m_hidValues) {
                 switch (usage) {
                     case 0x30: state.gamepad.sThumbLX = static_cast<SHORT>((value - 128) * 256); break;
-                    case 0x31: state.gamepad.sThumbLY = static_cast<SHORT>((127 - value) * 256); break;
+                    case 0x31: state.gamepad.sThumbLY = static_cast<SHORT>((128 - value) * 256); break; // Invert: 0->up, 255->down
                     case 0x32: state.gamepad.sThumbRX = static_cast<SHORT>((value - 128) * 256); break;
-                    case 0x35: state.gamepad.sThumbRY = static_cast<SHORT>((127 - value) * 256); break;
+                    case 0x35: state.gamepad.sThumbRY = static_cast<SHORT>((128 - value) * 256); break; // Invert: 0->up, 255->down
                 }
             }
         }
