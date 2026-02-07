@@ -27,9 +27,10 @@ Unlike basic wrappers, this project parses raw HID reports directly from the Win
 ## Key Features
 
 *   **Sub-millisecond Latency:** Optimized polling loop using `QueryPerformanceCounter` targeting 1000Hz+ refresh rates.
-*   **Universal Translation:**
-    *   **HID to XInput:** Translates generic joystick/gamepad inputs to standard X360 instructions.
-    *   **XInput to DirectInput:** Maps Xbox inputs to standard DirectInput axes and buttons (DualShock 4 emulation).
+*   **Bidirectional Translation:**
+    *   **XInput to DirectInput:** Maps Xbox controller inputs to DualShock 4 (default configuration).
+    *   **DirectInput to XInput:** Translates generic HID joystick/gamepad inputs to Xbox 360 controller.
+    *   **Combined Mode:** Both translation directions active simultaneously.
 *   **Advanced HID Parsing:** Uses Windows `HidP_` APIs to correctly interpret buttons and axes from any HID-compliant device, regardless of vendor.
 *   **Smart Input Processing:**
     *   **SOCD Cleaning:** Configurable resolution for Simultaneous Opposing Cardinal Directions (Last-Win, First-Win, Neutral).
@@ -45,9 +46,9 @@ Unlike basic wrappers, this project parses raw HID reports directly from the Win
 *   **Adaptive Device Scanning:** Smart scanning intervals (5s when no controllers, 30s when connected) to reduce overhead
 *   **Configuration System:** INI-based settings with runtime updates and persistence
 *   **Crash-Resistant Logging:** Continuous auto-save logging that survives crashes for debugging
-*   **HidHide Integration:** Automatic physical device hiding to prevent double-input issues
+*   **HidHide Integration:** Automatic physical device hiding to prevent double-input issues (works in both blacklist and whitelist modes)
 *   **Dynamic Device Management:** Automatically creates and destroys virtual devices as physical controllers are plugged in or removed
-*   **Duplicate Prevention:** Smart device tracking prevents multiple HID interfaces from the same controller filling all slots
+*   **Duplicate Prevention:** Smart device tracking prevents multiple HID interfaces from the same Xbox controller filling all slots (filters IG_01, IG_02, IG_03, etc.)
 
 ## Architecture
 
@@ -113,6 +114,8 @@ ninja
     - Download from [HidHide Releases](https://github.com/nefarius/HidHide/releases)
     - Run installer as administrator
     - Restart your computer
+    - **Important:** Keep "Inverse Application Cloak" (whitelist mode) OFF for simplest setup
+    - If you enable inverse mode, add `xinput_dinput_proxy.exe` to the HidHide whitelist via the HidHide Configuration Client
 
 3.  **Run the proxy executable** as administrator:
     ```bash
@@ -202,7 +205,9 @@ ctest --output-on-failure
 
 4. **Bluetooth Latency**: Bluetooth controllers have higher latency than USB. For competitive gaming, USB connection is recommended.
 
-5. **Multiple HID Interfaces**: Xbox controllers expose multiple HID interfaces (IG_01, IG_02, etc.). The proxy now correctly handles this and only creates one virtual device per physical controller.
+5. **Multiple HID Interfaces**: Xbox controllers expose multiple HID interfaces (IG_01, IG_02, IG_03, etc.). The proxy correctly filters these and only creates one virtual device per physical controller.
+
+6. **HidHide Compatibility**: This proxy uses DS4Windows-compatible IOCTL codes (0x8001xxxx) for HidHide v1.x. Works in both blacklist mode (inverse OFF) and whitelist mode (inverse ON). For whitelist mode, add the proxy executable to HidHide's application whitelist.
 
 ## License
 
