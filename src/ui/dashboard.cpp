@@ -119,9 +119,10 @@ void Dashboard::initializeUI() {
     auto hidhide_toggle = Checkbox("Enable HidHide", &m_hidHideEnabled);
     auto translation_toggle = Checkbox("Enable Translation Layer", &m_translationEnabled);
 
-    // 4. Rumble Test
+    // 4. Rumble Test with preset buttons
     m_rumbleBtnLabel = "START Rumble";
-    auto rumble_slider = Slider("Intensity:", &m_rumbleIntensity, 0.0f, 1.0f, 0.01f);
+    auto rumble_slider = Slider("", &m_rumbleIntensity, 0.0f, 1.0f, 0.01f);
+    
     auto rumble_btn = Button(&m_rumbleBtnLabel, [&] {
         m_rumbleTesting = !m_rumbleTesting;
         if (m_emulator) {
@@ -135,15 +136,32 @@ void Dashboard::initializeUI() {
         }
     });
 
-    auto max_rumble_btn = Button("MAX (100%)", [&] {
+    // Preset intensity buttons
+    auto preset_25_btn = Button("25%", [&] {
+        m_rumbleIntensity = 0.25f;
+        if (m_rumbleTesting && m_emulator) {
+            m_emulator->setRumbleIntensity(0.25f);
+        }
+    });
+    
+    auto preset_50_btn = Button("50%", [&] {
+        m_rumbleIntensity = 0.5f;
+        if (m_rumbleTesting && m_emulator) {
+            m_emulator->setRumbleIntensity(0.5f);
+        }
+    });
+    
+    auto preset_75_btn = Button("75%", [&] {
+        m_rumbleIntensity = 0.75f;
+        if (m_rumbleTesting && m_emulator) {
+            m_emulator->setRumbleIntensity(0.75f);
+        }
+    });
+    
+    auto preset_100_btn = Button("100%", [&] {
         m_rumbleIntensity = 1.0f;
-        m_rumbleTesting = true;
-        if (m_emulator) {
+        if (m_rumbleTesting && m_emulator) {
             m_emulator->setRumbleIntensity(1.0f);
-            m_emulator->setRumbleEnabled(true);
-            
-            std::lock_guard<std::mutex> lock(m_statsMutex);
-            m_statusMessage = "MAX Rumble ACTIVE!";
         }
     });
 
@@ -167,7 +185,10 @@ void Dashboard::initializeUI() {
         Renderer([&] { return separator(); }),
         rumble_slider,
         rumble_btn,
-        max_rumble_btn,
+        preset_25_btn,
+        preset_50_btn,
+        preset_75_btn,
+        preset_100_btn,
         Renderer([&] { return separator(); }),
         refresh_devices_btn,
         Button("Exit Application", [&] { stop(); })
@@ -249,23 +270,37 @@ ftxui::Element Dashboard::renderInteractiveControls() {
 }
 
 ftxui::Element Dashboard::renderRumblePanel() {
+    std::lock_guard<std::mutex> lock(m_statsMutex);
+    
+    // Format intensity as percentage
+    int intensityPercent = static_cast<int>(m_rumbleIntensity * 100);
+    
     return ftxui::vbox({
         ftxui::text("Functionality Tests") | ftxui::bold,
         ftxui::vbox({
             ftxui::text("Vibration/Rumble Test:") | ftxui::color(ftxui::Color::Yellow),
-            m_mainContainer->ChildAt(8)->Render(), // rumble_slider
             ftxui::hbox({
-                m_mainContainer->ChildAt(9)->Render(), // rumble_btn
+                ftxui::text("Intensity: " + std::to_string(intensityPercent) + "% "),
+                m_mainContainer->ChildAt(8)->Render() | ftxui::flex, // rumble_slider
+            }),
+            ftxui::hbox({
+                m_mainContainer->ChildAt(9)->Render(),  // rumble_btn (START/STOP)
                 ftxui::text(" "),
-                m_mainContainer->ChildAt(10)->Render(), // max_rumble_btn
+                m_mainContainer->ChildAt(10)->Render(), // preset_25_btn
+                ftxui::text(" "),
+                m_mainContainer->ChildAt(11)->Render(), // preset_50_btn
+                ftxui::text(" "),
+                m_mainContainer->ChildAt(12)->Render(), // preset_75_btn
+                ftxui::text(" "),
+                m_mainContainer->ChildAt(13)->Render(), // preset_100_btn
             }),
             ftxui::separator(),
             ftxui::text("Device Management:") | ftxui::color(ftxui::Color::Yellow),
-            m_mainContainer->ChildAt(12)->Render(), // refresh_devices_btn
+            m_mainContainer->ChildAt(15)->Render(), // refresh_devices_btn
             ftxui::separator(),
             ftxui::text("Status: " + m_statusMessage) | ftxui::dim,
             ftxui::filler(),
-            m_mainContainer->ChildAt(13)->Render(), // exit_btn
+            m_mainContainer->ChildAt(16)->Render(), // exit_btn
         }) | ftxui::border
     });
 }
