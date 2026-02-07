@@ -161,38 +161,33 @@ bool InputCapture::initializeHID() {
             Logger::log("InputCapture: Enumerating HID Device. Instance ID: " + Logger::wstringToNarrow(actualInstanceId));
 
             // FILTER: Ignore ViGEm virtual devices to prevent feedback loops
-            // These typically contain "VIGEM" or "ROOT\VIGEMBUS" in their path or ID
-            std::wstring upperPath = devicePath;
-            std::transform(upperPath.begin(), upperPath.end(), upperPath.begin(), ::towupper);
-            std::wstring upperId = actualInstanceId;
-            std::transform(upperId.begin(), upperId.end(), upperId.begin(), ::towupper);
-
-            bool isVirtualViGEm = (upperPath.find(L"VIGEM") != std::wstring::npos || 
-                                   upperId.find(L"VIGEM") != std::wstring::npos ||
-                                   upperId.find(L"ROOT\\VIGEMBUS") != std::wstring::npos);
-
-            // Robust check: Open device briefly to check Manufacturer/Product strings
-            if (!isVirtualViGEm) {
-                HANDLE tempHandle = CreateFileW(devicePath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
-                if (tempHandle != INVALID_HANDLE_VALUE) {
-                    wchar_t manufacturer[128] = L"";
-                    wchar_t product[128] = L"";
-                    HidD_GetManufacturerString(tempHandle, manufacturer, sizeof(manufacturer));
-                    HidD_GetProductString(tempHandle, product, sizeof(product));
-                    CloseHandle(tempHandle);
-
-                    std::wstring upperManufacturer = manufacturer;
-                    std::transform(upperManufacturer.begin(), upperManufacturer.end(), upperManufacturer.begin(), ::towupper);
-                    std::wstring upperProduct = product;
-                    std::transform(upperProduct.begin(), upperProduct.end(), upperProduct.begin(), ::towupper);
-
-                    if (upperManufacturer.find(L"VIGEM") != std::wstring::npos || 
-                        upperManufacturer.find(L"BENJAMIN") != std::wstring::npos ||
-                        upperProduct.find(L"VIGEM") != std::wstring::npos) {
+            // DS4Windows method: Check DEVPKEY_Device_UINumber property
+            // Virtual ViGEm devices have this property set, real devices don't
+            bool isVirtualViGEm = false;
+            
+            // Get device info for property checking
+            HDEVINFO propDeviceInfoSet = SetupDiGetClassDevsW(&hidGuid, actualInstanceId.c_str(), 0, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
+            if (propDeviceInfoSet != INVALID_HANDLE_VALUE) {
+                SP_DEVINFO_DATA devInfoData = {sizeof(SP_DEVINFO_DATA)};
+                if (SetupDiEnumDeviceInfo(propDeviceInfoSet, 0, &devInfoData)) {
+                    // Check DEVPKEY_Device_UINumber property
+                    DEVPROPKEY uiNumberKey = {
+                        {0xa45c254e, 0xdf1c, 0x4efd, {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}},
+                        18  // pid for UINumber
+                    };
+                    
+                    DEVPROPTYPE propertyType;
+                    BYTE buffer[256];
+                    DWORD requiredSize = 0;
+                    
+                    if (SetupDiGetDevicePropertyW(propDeviceInfoSet, &devInfoData, &uiNumberKey,
+                        &propertyType, buffer, sizeof(buffer), &requiredSize, 0)) {
+                        // Property exists and has a value - this is a virtual device
                         isVirtualViGEm = true;
-                        Logger::log("InputCapture: Blocked virtual device (Metadata match): " + Logger::wstringToNarrow(upperProduct));
+                        Logger::log("InputCapture: Blocked virtual ViGEm device: " + Logger::wstringToNarrow(actualInstanceId));
                     }
                 }
+                SetupDiDestroyDeviceInfoList(propDeviceInfoSet);
             }
 
             if (isVirtualViGEm) {
