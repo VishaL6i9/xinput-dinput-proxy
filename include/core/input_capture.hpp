@@ -29,11 +29,20 @@ struct ControllerState {
     // HID device info
     HANDLE hidHandle;
     std::wstring devicePath;
+    std::wstring deviceInstanceId; // Unique system ID for HidHide
     std::wstring productName; // Friendly name
     bool isConnected;
     DWORD lastError; // Store API error code for debugging
     
-    // Button states
+    // Raw HID Data (Captured during poll)
+    std::vector<USAGE> m_activeButtons;
+    std::unordered_map<USAGE, LONG> m_hidValues;
+    
+    // For XInput source, we still keep the xinputState above.
+    // XInput state is already captured in xinputState.Gamepad.
+    
+    // Processed state (maintained for backward compatibility if needed, 
+    // but primary translation happens in TranslationLayer)
     struct {
         WORD wButtons;
         BYTE bLeftTrigger;
@@ -53,7 +62,8 @@ struct ControllerState {
     // Async I/O
     OVERLAPPED overlapped;
     bool isReadPending;
-    BYTE inputBuffer[256];
+    static constexpr size_t INPUT_BUFFER_SIZE = 512; // Increased from 256 for exotic devices
+    BYTE inputBuffer[INPUT_BUFFER_SIZE];
     
     // Timing
     uint64_t timestamp;
@@ -73,25 +83,35 @@ public:
     // Device management
     void refreshDevices();
     int getConnectedDeviceCount() const;
+    
+    // Thread-safe state access
+    void lockStates() const { m_statesMutex.lock(); }
+    void unlockStates() const { m_statesMutex.unlock(); }
+    
+    // Output control
+    void setVibration(int userId, float leftMotor, float rightMotor);
 
     // Debugging
     // void getStartupLogs() removed in favor of unified Logger
-    
+
+    // Device instance ID extraction
+    static std::wstring extractDeviceInstanceId(const std::wstring& devicePath);
+
 private:
     bool initializeXInput();
     bool initializeHID();
     void pollXInputControllers();
     void pollHIDControllers();
-    
+
     mutable std::mutex m_statesMutex;
     std::vector<ControllerState> m_controllerStates;
-    
+
     std::atomic<bool> m_running;
     std::unique_ptr<std::thread> m_pollingThread;
-    
+
     // Timing
     uint64_t m_lastPollTime;
-    
+
     // Device enumeration
     std::vector<std::wstring> m_hidDevicePaths;
 

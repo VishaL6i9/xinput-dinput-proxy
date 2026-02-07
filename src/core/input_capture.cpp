@@ -9,6 +9,7 @@
 #include <windows.h>
 #include <hidsdi.h>
 #include <setupapi.h>
+#include <cfgmgr32.h>
 
 InputCapture::InputCapture() 
     : m_running(false), m_lastPollTime(0) {
@@ -101,7 +102,7 @@ bool InputCapture::initializeXInput() {
         ControllerState ctrlState{};
         ctrlState.userId = static_cast<int>(i);
         ctrlState.xinputState = initialState;
-        ctrlState.isConnected = (res == ERROR_SUCCESS);
+        ctrlState.isConnected = false; // Initially disconnected until matched with verified HID
         ctrlState.lastError = res;
         ctrlState.timestamp = TimingUtils::getPerformanceCounter();
         
@@ -143,25 +144,153 @@ bool InputCapture::initializeHID() {
         deviceDetailData->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W);
         
         // Get device path
-        if (SetupDiGetDeviceInterfaceDetailW(deviceInfoSet, &deviceInterfaceData, deviceDetailData, requiredSize, nullptr, nullptr)) {
-            newDevicePaths.push_back(deviceDetailData->DevicePath);
+        SP_DEVINFO_DATA devInfoData;
+        devInfoData.cbSize = sizeof(SP_DEVINFO_DATA);
+        if (SetupDiGetDeviceInterfaceDetailW(deviceInfoSet, &deviceInterfaceData, deviceDetailData, requiredSize, nullptr, &devInfoData)) {
+            std::wstring devicePath = deviceDetailData->DevicePath;
+            newDevicePaths.push_back(devicePath);
             
+            // Get Device Instance ID
+            wchar_t instanceId[MAX_DEVICE_ID_LEN];
+            std::wstring actualInstanceId;
+            if (SetupDiGetDeviceInstanceIdW(deviceInfoSet, &devInfoData, instanceId, MAX_DEVICE_ID_LEN, nullptr)) {
+                actualInstanceId = instanceId;
+            }
+
+            // Diagnostic Logging
+            Logger::log("InputCapture: Enumerating HID Device. Instance ID: " + Logger::wstringToNarrow(actualInstanceId));
+
+            // FILTER: Ignore ViGEm virtual devices to prevent feedback loops
+            // These typically contain "VIGEM" or "ROOT\VIGEMBUS" in their path or ID
+            std::wstring upperPath = devicePath;
+            std::transform(upperPath.begin(), upperPath.end(), upperPath.begin(), ::towupper);
+            std::wstring upperId = actualInstanceId;
+            std::transform(upperId.begin(), upperId.end(), upperId.begin(), ::towupper);
+
+            bool isVirtualViGEm = (upperPath.find(L"VIGEM") != std::wstring::npos || 
+                                   upperId.find(L"VIGEM") != std::wstring::npos ||
+                                   upperId.find(L"ROOT\\VIGEMBUS") != std::wstring::npos);
+
+            // Robust check: Open device briefly to check Manufacturer/Product strings
+            if (!isVirtualViGEm) {
+                HANDLE tempHandle = CreateFileW(devicePath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+                if (tempHandle != INVALID_HANDLE_VALUE) {
+                    wchar_t manufacturer[128] = L"";
+                    wchar_t product[128] = L"";
+                    HidD_GetManufacturerString(tempHandle, manufacturer, sizeof(manufacturer));
+                    HidD_GetProductString(tempHandle, product, sizeof(product));
+                    CloseHandle(tempHandle);
+
+                    std::wstring upperManufacturer = manufacturer;
+                    std::transform(upperManufacturer.begin(), upperManufacturer.end(), upperManufacturer.begin(), ::towupper);
+                    std::wstring upperProduct = product;
+                    std::transform(upperProduct.begin(), upperProduct.end(), upperProduct.begin(), ::towupper);
+
+                    if (upperManufacturer.find(L"VIGEM") != std::wstring::npos || 
+                        upperManufacturer.find(L"BENJAMIN") != std::wstring::npos ||
+                        upperProduct.find(L"VIGEM") != std::wstring::npos) {
+                        isVirtualViGEm = true;
+                        Logger::log("InputCapture: Blocked virtual device (Metadata match): " + Logger::wstringToNarrow(upperProduct));
+                    }
+                }
+            }
+
+            if (isVirtualViGEm) {
+                free(deviceDetailData);
+                continue; 
+            }
+
             // Check if this device is already in our states list
             bool found = false;
             {
                 std::lock_guard<std::mutex> lock(m_statesMutex);
+                
+                // Identify if this is an XInput device
+                bool isXInput = (devicePath.find(L"IG_") != std::wstring::npos || 
+                                 actualInstanceId.find(L"IG_") != std::wstring::npos);
+
+                // Match by Instance ID (Stable) instead of Device Path (Transient)
                 for (auto& state : m_controllerStates) {
-                    if (state.devicePath == deviceDetailData->DevicePath) {
+                    if (!state.deviceInstanceId.empty() && state.deviceInstanceId == actualInstanceId) {
+                        state.devicePath = devicePath; // Update path in case it changed
+                        state.isConnected = true; 
                         found = true;
                         break;
                     }
                 }
                 
+                if (!found && isXInput) {
+                    // Extract base device ID (without interface suffix like &IG_01, &IG_02, etc.)
+                    // Example: HID\VID_045E&PID_028E&IG_01\8&F746FFA&0&0000 -> HID\VID_045E&PID_028E
+                    std::wstring baseDeviceId = actualInstanceId;
+                    size_t igPos = baseDeviceId.find(L"&IG_");
+                    if (igPos != std::wstring::npos) {
+                        baseDeviceId = baseDeviceId.substr(0, igPos);
+                    }
+                    
+                    // Check if we've already assigned ANY interface from this physical device
+                    bool alreadyAssigned = false;
+                    for (const auto& state : m_controllerStates) {
+                        if (state.userId >= 0 && !state.deviceInstanceId.empty()) {
+                            std::wstring existingBaseId = state.deviceInstanceId;
+                            size_t existingIgPos = existingBaseId.find(L"&IG_");
+                            if (existingIgPos != std::wstring::npos) {
+                                existingBaseId = existingBaseId.substr(0, existingIgPos);
+                            }
+                            if (existingBaseId == baseDeviceId) {
+                                alreadyAssigned = true;
+                                found = true; // Mark as found so we don't add it again
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // Only assign if this physical device hasn't been assigned yet
+                    if (!alreadyAssigned) {
+                        // Try to assign this Instance ID to an XInput slot (User 0-3)
+                        for (auto& state : m_controllerStates) {
+                            if (state.userId >= 0 && state.deviceInstanceId.empty()) {
+                                state.deviceInstanceId = actualInstanceId;
+                                state.devicePath = devicePath;
+                                state.isConnected = true; // MARK CONNECTED ONLY WHEN MATCHED
+                                
+                                // Also try to get the product name for this XInput device
+                                HANDLE h = CreateFileW(devicePath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+                                if (h != INVALID_HANDLE_VALUE) {
+                                    wchar_t productBuffer[128];
+                                    if (HidD_GetProductString(h, productBuffer, sizeof(productBuffer))) {
+                                        state.productName = productBuffer;
+                                    }
+                                    CloseHandle(h);
+                                }
+                                
+                                Logger::log("InputCapture: Matched XInput device to User " + std::to_string(state.userId) + ": " + Logger::wstringToNarrow(state.productName));
+                                
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (!found) {
+                    // One last check: Ensure this device isn't already added as a generic HID
+                    for (auto& state : m_controllerStates) {
+                        if (state.userId < 0 && state.deviceInstanceId == actualInstanceId) {
+                            state.devicePath = devicePath;
+                            state.isConnected = true;
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+
                 if (!found) {
                     // Add new controller state for this HID device
                     ControllerState newState{};
                     newState.userId = -1; // HID device
-                    newState.devicePath = deviceDetailData->DevicePath;
+                    newState.devicePath = devicePath;
+                    newState.deviceInstanceId = actualInstanceId;
                     newState.isConnected = true;
                     newState.timestamp = TimingUtils::getPerformanceCounter();
                     
@@ -213,6 +342,24 @@ bool InputCapture::initializeHID() {
                                  HidP_GetValueCaps(HidP_Input, newState.valueCaps.data(), &capsLength, preparsedData);
                              }
                              
+                             // Diagnostic Logging
+                             HIDD_ATTRIBUTES attributes;
+                             attributes.Size = sizeof(HIDD_ATTRIBUTES);
+                             if (HidD_GetAttributes(deviceHandle, &attributes)) {
+                                 std::stringstream ss;
+                                 ss << "InputCapture: HID Attributes - VendorID: 0x" << std::hex << attributes.VendorID 
+                                    << ", ProductID: 0x" << attributes.ProductID 
+                                    << ", Version: 0x" << attributes.VersionNumber << std::dec;
+                                 Logger::log(ss.str());
+                             }
+                             
+                             std::stringstream ss;
+                             ss << "InputCapture: HID Capabilities - UsagePage: 0x" << std::hex << newState.caps.UsagePage 
+                                << ", Usage: 0x" << newState.caps.Usage << std::dec
+                                << ", Buttons: " << newState.caps.NumberInputButtonCaps
+                                << ", Axes: " << newState.caps.NumberInputValueCaps;
+                             Logger::log(ss.str());
+
                              // Filter for Gamepads/Joysticks only
                              // Usage Page 0x01 (Generic Desktop), Usage 0x04 (Joystick) or 0x05 (Gamepad)
                              if (newState.caps.UsagePage == 0x01 && (newState.caps.Usage == 0x04 || newState.caps.Usage == 0x05)) {
@@ -221,8 +368,29 @@ bool InputCapture::initializeHID() {
                                  for (wchar_t wc : pName) {
                                      pNameStr += static_cast<char>(wc);
                                  }
-                                 Logger::log("InputCapture: HID Device Found: " + pNameStr);
-                                 m_controllerStates.push_back(newState);
+                                 
+                                 // Check if this device is already in the list (by deviceInstanceId)
+                                 bool alreadyExists = false;
+                                 {
+                                     std::lock_guard<std::mutex> lock(m_statesMutex);
+                                     for (const auto& existing : m_controllerStates) {
+                                         if (existing.deviceInstanceId == newState.deviceInstanceId && !newState.deviceInstanceId.empty()) {
+                                             alreadyExists = true;
+                                             break;
+                                         }
+                                     }
+                                 }
+                                 
+                                 if (!alreadyExists) {
+                                     Logger::log("InputCapture: HID Device Found: " + pNameStr);
+                                     std::lock_guard<std::mutex> lock(m_statesMutex);
+                                     m_controllerStates.push_back(newState);
+                                 } else {
+                                     // Device already exists, close handles
+                                     if (newState.overlapped.hEvent) CloseHandle(newState.overlapped.hEvent);
+                                     CloseHandle(newState.hidHandle);
+                                     if (newState.preparsedData) HidD_FreePreparsedData(newState.preparsedData);
+                                 }
                              } else {
                                  // Close handle if not a relevant device
                                  if (newState.overlapped.hEvent) CloseHandle(newState.overlapped.hEvent);
@@ -259,9 +427,22 @@ void InputCapture::pollXInputControllers() {
         {
             std::lock_guard<std::mutex> lock(m_statesMutex);
             if (i < m_controllerStates.size()) {
+                // Log first successful poll for debugging
+                static bool firstPollLogged[XUSER_MAX_COUNT] = {false, false, false, false};
+                if (result == ERROR_SUCCESS && !firstPollLogged[i]) {
+                    Logger::log("InputCapture: First successful XInput poll for User " + std::to_string(i) + 
+                               ", PacketNumber: " + std::to_string(state.dwPacketNumber));
+                    firstPollLogged[i] = true;
+                }
+                
                 m_controllerStates[i].xinputState = state;
                 m_controllerStates[i].xinputPacketNumber = state.dwPacketNumber;
-                m_controllerStates[i].isConnected = (result == ERROR_SUCCESS);
+                // Only mark as connected if it's already verified as a physical device
+                // If it was connected but XInput reports failure, mark as disconnected
+                if (result != ERROR_SUCCESS) {
+                    m_controllerStates[i].isConnected = false;
+                    m_controllerStates[i].deviceInstanceId = L""; // Clear so it can be re-matched
+                }
                 m_controllerStates[i].lastError = result;
                 m_controllerStates[i].timestamp = TimingUtils::getPerformanceCounter();
             }
@@ -358,20 +539,8 @@ void InputCapture::getHIDUsages(ControllerState& state, PCHAR report, ULONG repo
     );
 
     if (status == HIDP_STATUS_SUCCESS) {
-        state.gamepad.wButtons = 0;
-        for (ULONG i = 0; i < usageLength; ++i) {
-             // Map standard usages to XInput buttons
-             // Simplified generic mapping
-             switch (usages[i]) {
-                 case 0x01: state.gamepad.wButtons |= XINPUT_GAMEPAD_A; break;
-                 case 0x02: state.gamepad.wButtons |= XINPUT_GAMEPAD_B; break;
-                 case 0x03: state.gamepad.wButtons |= XINPUT_GAMEPAD_X; break;
-                 case 0x04: state.gamepad.wButtons |= XINPUT_GAMEPAD_Y; break;
-                 case 0x05: state.gamepad.wButtons |= XINPUT_GAMEPAD_LEFT_SHOULDER; break;
-                 case 0x06: state.gamepad.wButtons |= XINPUT_GAMEPAD_RIGHT_SHOULDER; break;
-                 // Further mapping needed for specific devices
-             }
-        }
+        state.m_activeButtons.clear();
+        state.m_activeButtons.assign(usages.begin(), usages.begin() + usageLength);
     }
 }
 
@@ -390,6 +559,7 @@ void InputCapture::getHIDValues(ControllerState& state, PCHAR report, ULONG repo
         );
         
         if (status == HIDP_STATUS_SUCCESS) {
+             state.m_hidValues[cap.Range.UsageMin] = static_cast<LONG>(value);
              // Map axes generic desktop page
              if (cap.UsagePage == 0x01) {
                  switch (cap.Range.UsageMin) {
@@ -403,10 +573,35 @@ void InputCapture::getHIDValues(ControllerState& state, PCHAR report, ULONG repo
                         state.gamepad.sThumbRX = static_cast<SHORT>(value - 32768);
                         break;
                      case 0x35: // Rz (often Right Y)
-                        state.gamepad.sThumbRY = static_cast<SHORT>(32768 - value); 
+                        state.gamepad.sThumbRY = static_cast<SHORT>(32768 - value);
                         break;
                  }
              }
         }
     }
+}
+
+void InputCapture::setVibration(int userId, float leftMotor, float rightMotor) {
+    if (userId < 0 || userId > 3) return;
+    
+    XINPUT_VIBRATION vibration;
+    vibration.wLeftMotorSpeed = static_cast<WORD>(leftMotor * 65535);
+    vibration.wRightMotorSpeed = static_cast<WORD>(rightMotor * 65535);
+    XInputSetState(userId, &vibration);
+}
+
+std::wstring InputCapture::extractDeviceInstanceId(const std::wstring& devicePath) {
+    // Extract the device instance ID from the device path
+    // Device paths typically look like: \\?\HID#VID_XXXX&PID_XXXX#XXXXXXXX#{...}
+    size_t start = devicePath.find(L"HID#");
+    if (start != std::wstring::npos) {
+        size_t end = devicePath.find(L'#', start + 4);
+        if (end != std::wstring::npos) {
+            size_t nextEnd = devicePath.find(L'#', end + 1);
+            if (nextEnd != std::wstring::npos) {
+                return devicePath.substr(start, nextEnd - start);
+            }
+        }
+    }
+    return L"";
 }
