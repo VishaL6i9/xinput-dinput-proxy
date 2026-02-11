@@ -136,38 +136,38 @@ void TranslationLayer::applySOCDControl(TranslatedState::GamepadState& gamepad) 
     switch (m_socdMethod) {
         case 0: // Last Win - Prioritize the most recently pressed direction
         {
-            // For horizontal movement
-            if (leftPressed && rightPressed) {
-                // Keep the one that was pressed last based on stick position
-                if (gamepad.sThumbLX < 0) {
-                    gamepad.wButtons &= ~XINPUT_GAMEPAD_DPAD_RIGHT;
-                } else {
-                    gamepad.wButtons &= ~XINPUT_GAMEPAD_DPAD_LEFT;
-                }
-            }
+            // NOTE: True "Last Win" requires temporal tracking of button state changes.
+            // For now, we implement a simplified version that neutralizes both directions.
+            // A proper implementation would track m_lastDpadChangeTime per direction.
             
-            // For vertical movement
-            if (upPressed && downPressed) {
-                // Keep the one that was pressed last based on stick position
-                if (gamepad.sThumbLY > 0) {
-                    gamepad.wButtons &= ~XINPUT_GAMEPAD_DPAD_DOWN;
-                } else {
-                    gamepad.wButtons &= ~XINPUT_GAMEPAD_DPAD_UP;
-                }
-            }
-            break;
-        }
-        case 1: // First Win - Prioritize the first pressed direction
-        {
             // For horizontal movement
             if (leftPressed && rightPressed) {
-                // Keep both directions disabled (neutral)
+                // Neutralize both - proper Last Win needs state history
                 gamepad.wButtons &= ~(XINPUT_GAMEPAD_DPAD_LEFT | XINPUT_GAMEPAD_DPAD_RIGHT);
             }
             
             // For vertical movement
             if (upPressed && downPressed) {
-                // Keep both directions disabled (neutral)
+                // Neutralize both - proper Last Win needs state history
+                gamepad.wButtons &= ~(XINPUT_GAMEPAD_DPAD_UP | XINPUT_GAMEPAD_DPAD_DOWN);
+            }
+            break;
+        }
+        case 1: // First Win - Prioritize the first pressed direction
+        {
+            // NOTE: True "First Win" requires temporal tracking of button state changes.
+            // For now, we implement a simplified version that neutralizes both directions.
+            // A proper implementation would track which button was pressed first.
+            
+            // For horizontal movement
+            if (leftPressed && rightPressed) {
+                // Neutralize both - proper First Win needs state history
+                gamepad.wButtons &= ~(XINPUT_GAMEPAD_DPAD_LEFT | XINPUT_GAMEPAD_DPAD_RIGHT);
+            }
+            
+            // For vertical movement
+            if (upPressed && downPressed) {
+                // Neutralize both - proper First Win needs state history
                 gamepad.wButtons &= ~(XINPUT_GAMEPAD_DPAD_UP | XINPUT_GAMEPAD_DPAD_DOWN);
             }
             break;
@@ -261,7 +261,7 @@ TranslatedState TranslationLayer::convertXInputToStandard(const ControllerState&
  * This function handles the complex task of translating raw HID reports into
  * a standardized gamepad format. It supports:
  * - Device-specific profiles (e.g., DualShock 4, DualSense)
- * - Generic HID gamepad fallback mapping
+ * - Generic HID gamepad fallback mapping with proper range validation
  * - Axis normalization and inversion where needed
  * 
  * HID devices report axes in various ranges (0-255, 0-65535, etc.) and may
@@ -317,7 +317,7 @@ TranslatedState TranslationLayer::convertHIDToStandard(const ControllerState& in
             }
         }
     } else {
-        // 2. Fallback to robust generic mapping
+        // 2. Fallback to robust generic mapping with proper range validation
         // Standardize Buttons (1-based index to standard bits)
         for (USAGE usage : inputState.m_activeButtons) {
             if (usage >= 1 && usage <= 16) {
@@ -329,18 +329,61 @@ TranslatedState TranslationLayer::convertHIDToStandard(const ControllerState& in
             }
         }
         
-        // Standardize Axes (Generic Desktop Page 0x01)
+        // Standardize Axes (Generic Desktop Page 0x01) with proper range detection
+        // Find the corresponding value caps to get actual min/max ranges
         for (const auto& [usage, value] : inputState.m_hidValues) {
-            // value is likely 0-65535 or 0-1023 etc. 
-            // We'll normalize based on the reported caps if we had them here, 
-            // but for now let's assume standard 0-65535 for generic.
+            // Find the value cap for this usage to get the actual range
+            LONG logicalMin = 0;
+            LONG logicalMax = 65535; // Default assumption
+            
+            // Search for the matching value cap
+            for (const auto& cap : inputState.valueCaps) {
+                if (cap.UsagePage == 0x01 && cap.Range.UsageMin == usage) {
+                    logicalMin = cap.LogicalMin;
+                    logicalMax = cap.LogicalMax;
+                    break;
+                }
+            }
+            
+            // Calculate the center point and range
+            LONG center = (logicalMax + logicalMin) / 2;
+            LONG range = logicalMax - logicalMin;
+            
+            // Avoid division by zero
+            if (range == 0) range = 1;
+            
+            // Normalize to -32768 to 32767 range
+            auto normalizeAxis = [&](LONG rawValue, bool invert = false) -> SHORT {
+                // Calculate normalized value: (value - center) / (range/2) * 32767
+                double normalized = static_cast<double>(rawValue - center) / (range / 2.0) * 32767.0;
+                
+                // Clamp to SHORT range
+                if (normalized > 32767.0) normalized = 32767.0;
+                if (normalized < -32768.0) normalized = -32768.0;
+                
+                SHORT result = static_cast<SHORT>(normalized);
+                return invert ? static_cast<SHORT>(-result) : result;
+            };
+            
+            // Normalize to 0 to 255 range for triggers
+            auto normalizeTrigger = [&](LONG rawValue) -> BYTE {
+                // Map from [logicalMin, logicalMax] to [0, 255]
+                double normalized = static_cast<double>(rawValue - logicalMin) / range * 255.0;
+                
+                // Clamp to BYTE range
+                if (normalized > 255.0) normalized = 255.0;
+                if (normalized < 0.0) normalized = 0.0;
+                
+                return static_cast<BYTE>(normalized);
+            };
+            
             switch (usage) {
-                case 0x30: state.gamepad.sThumbLX = static_cast<SHORT>(value - 32768); break;
-                case 0x31: state.gamepad.sThumbLY = static_cast<SHORT>(32767 - value); break;
-                case 0x32: state.gamepad.sThumbRX = static_cast<SHORT>(value - 32768); break;
-                case 0x35: state.gamepad.sThumbRY = static_cast<SHORT>(32767 - value); break;
-                case 0x33: state.gamepad.bLeftTrigger = static_cast<BYTE>(value / 256); break;
-                case 0x34: state.gamepad.bRightTrigger = static_cast<BYTE>(value / 256); break;
+                case 0x30: state.gamepad.sThumbLX = normalizeAxis(value, false); break;
+                case 0x31: state.gamepad.sThumbLY = normalizeAxis(value, true); break; // Invert Y
+                case 0x32: state.gamepad.sThumbRX = normalizeAxis(value, false); break;
+                case 0x35: state.gamepad.sThumbRY = normalizeAxis(value, true); break; // Invert Y
+                case 0x33: state.gamepad.bLeftTrigger = normalizeTrigger(value); break;
+                case 0x34: state.gamepad.bRightTrigger = normalizeTrigger(value); break;
             }
         }
     }
