@@ -42,6 +42,7 @@ add_executable(${PROJECT_NAME}
     src/core/input_capture.cpp
     src/core/translation_layer.cpp
     src/core/virtual_device_emulator.cpp
+    src/core/device_manager.cpp
     src/ui/dashboard.cpp
     src/utils/timing.cpp
     src/utils/threading.cpp
