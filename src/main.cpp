@@ -6,15 +6,20 @@
 #include "core/input_capture.hpp"
 #include "core/translation_layer.hpp"
 #include "core/virtual_device_emulator.hpp"
+#include "core/device_manager.hpp"
 #include "ui/dashboard.hpp"
 #include "utils/timing.hpp"
 #include "utils/logger.hpp"
 #include "utils/config_manager.hpp"
 #include <csignal>
 #include <atomic>
-#include <set>
-#include <map>
 #include <shlobj.h> // For IsUserAnAdmin
+
+// Configuration constants
+namespace Config {
+    constexpr int DEFAULT_POLLING_FREQUENCY_HZ = 1000;
+    constexpr double MICROSECONDS_PER_SECOND = 1000000.0;
+}
 
 // Global flag for signal handling
 std::atomic<bool> g_running(true);
@@ -78,6 +83,12 @@ int main() {
     // Load emulator settings from config
     virtualDeviceEmulator->setRumbleEnabled(config.getBool("rumble_enabled", true));
     virtualDeviceEmulator->setRumbleIntensity(config.getFloat("rumble_intensity", 1.0f));
+    
+    // Create device manager
+    auto deviceManager = std::make_unique<DeviceManager>(
+        virtualDeviceEmulator.get(),
+        translationLayer.get()
+    );
     
     // Create dashboard UI
     auto dashboard = std::make_unique<Dashboard>();
@@ -145,21 +156,16 @@ int main() {
     // Register console control handler
     SetConsoleCtrlHandler(consoleHandler, TRUE);
 
-    // Track physical devices that have been hidden or failed to hide
-    std::set<std::wstring> hiddenDeviceIds;
-    std::set<std::wstring> failedToHideDeviceIds;
-    
-    // Track active virtual devices by userId
-    std::map<int, int> activeVirtualXInputDevices; // userId -> virtualId
-    std::map<int, int> activeVirtualDInputDevices;  // userId -> virtualId
-
     // Main proxy loop
     uint64_t frameCount = 0;
     auto lastTime = TimingUtils::getPerformanceCounter();
     
     // Get polling frequency from config
-    int pollingFrequency = config.getInt("polling_frequency", 1000);
-    const double targetIntervalMicroseconds = 1000000.0 / pollingFrequency; // Convert Hz to microseconds
+    int pollingFrequency = config.getInt("polling_frequency", Config::DEFAULT_POLLING_FREQUENCY_HZ);
+    const double targetIntervalMicroseconds = Config::MICROSECONDS_PER_SECOND / pollingFrequency;
+    
+    // Device refresh timing
+    uint64_t lastRefreshTime = lastTime;
 
     while (g_running) {
         auto currentTime = TimingUtils::getPerformanceCounter();
@@ -171,70 +177,14 @@ int main() {
         // Get captured input states (thread-safe copy)
         auto inputStates = inputCapture->getInputStates();
 
-        // Check for new physical devices and manage virtual devices
-        for (const auto& state : inputStates) {
-            if (state.isConnected) {
-                // 1. Conditionally apply HidHide logic
-                if (dashboard->isHidHideEnabled() && virtualDeviceEmulator->isHidHideIntegrationEnabled()) {
-                    if (!state.deviceInstanceId.empty() && 
-                        hiddenDeviceIds.find(state.deviceInstanceId) == hiddenDeviceIds.end() &&
-                        failedToHideDeviceIds.find(state.deviceInstanceId) == failedToHideDeviceIds.end()) {
-                        if (virtualDeviceEmulator->addPhysicalDeviceToHidHideBlacklist(state.deviceInstanceId)) {
-                            hiddenDeviceIds.insert(state.deviceInstanceId);
-                            std::cout << "Hidden physical device: " << Logger::wstringToNarrow(state.deviceInstanceId) << std::endl;
-                        } else {
-                            failedToHideDeviceIds.insert(state.deviceInstanceId);
-                        }
-                    }
-                }
+        // Process device connections/disconnections and manage virtual devices
+        deviceManager->processDevices(
+            inputStates,
+            dashboard->isTranslationEnabled(),
+            dashboard->isHidHideEnabled()
+        );
 
-                // 2. Dynamic Virtual Device Creation (ONLY IF TRANSLATION IS ENABLED)
-                if (dashboard->isTranslationEnabled()) {
-                    // DualShock 4 Emulation (XInput -> DInput)
-                    if (translationLayer->isXInputToDInputEnabled()) {
-                        if (activeVirtualDInputDevices.find(state.userId) == activeVirtualDInputDevices.end()) {
-                            std::string sourceName = Logger::wstringToNarrow(state.productName);
-                            if (sourceName.empty()) sourceName = "Xbox 360 Controller (User " + std::to_string(state.userId) + ")";
-                            
-                            int virtualId = virtualDeviceEmulator->createVirtualDevice(TranslatedState::TARGET_DINPUT, state.userId, sourceName);
-                            if (virtualId >= 0) {
-                                activeVirtualDInputDevices[state.userId] = virtualId;
-                                std::cout << "Created virtual DS4 for " << sourceName << std::endl;
-                                Logger::log("DEBUG: Created virtual DS4 (type=TARGET_DINPUT=1) for userId=" + std::to_string(state.userId));
-                            }
-                        }
-                    }
-                    
-                    // Xbox 360 Emulation (DInput -> XInput)
-                    if (translationLayer->isDInputToXInputEnabled()) {
-                        if (activeVirtualXInputDevices.find(state.userId) == activeVirtualXInputDevices.end()) {
-                            std::string sourceName = Logger::wstringToNarrow(state.productName);
-                            if (sourceName.empty()) sourceName = "HID Device";
-                            
-                            int virtualId = virtualDeviceEmulator->createVirtualDevice(TranslatedState::TARGET_XINPUT, state.userId, sourceName);
-                            if (virtualId >= 0) {
-                                activeVirtualXInputDevices[state.userId] = virtualId;
-                                std::cout << "Created virtual Xbox 360 for " << sourceName << std::endl;
-                            }
-                        }
-                    }
-                }
-            } else {
-                // Handle Disconnection
-                if (activeVirtualXInputDevices.count(state.userId)) {
-                    virtualDeviceEmulator->destroyVirtualDevice(activeVirtualXInputDevices[state.userId]);
-                    activeVirtualXInputDevices.erase(state.userId);
-                    std::cout << "Destroyed virtual Xbox 360 for User " << state.userId << std::endl;
-                }
-                if (activeVirtualDInputDevices.count(state.userId)) {
-                    virtualDeviceEmulator->destroyVirtualDevice(activeVirtualDInputDevices[state.userId]);
-                    activeVirtualDInputDevices.erase(state.userId);
-                    std::cout << "Destroyed virtual DS4 for User " << state.userId << std::endl;
-                }
-            }
-        }
-
-        // 3. Conditional Translation and Emulation
+        // Translate and send input if translation is enabled
         if (dashboard->isTranslationEnabled()) {
             std::vector<TranslatedState> translatedStates = translationLayer->translate(inputStates);
             virtualDeviceEmulator->sendInput(translatedStates);
@@ -244,19 +194,15 @@ int main() {
         dashboard->updateStats(frameCount++, deltaTime, inputStates);
 
         // Adaptive device refresh based on connected controller count
-        static uint64_t lastRefreshTime = currentTime;
         int connectedCount = 0;
         for (const auto& state : inputStates) {
             if (state.isConnected) connectedCount++;
         }
         
         // Determine refresh interval based on controller count
-        double refreshIntervalMicroseconds;
-        if (connectedCount == 0) {
-            refreshIntervalMicroseconds = 5000000.0; // 5 seconds when no controllers
-        } else {
-            refreshIntervalMicroseconds = 30000000.0; // 30 seconds when controllers connected
-        }
+        double refreshIntervalMicroseconds = (connectedCount == 0) 
+            ? DeviceManager::SCAN_INTERVAL_NO_CONTROLLERS_US
+            : DeviceManager::SCAN_INTERVAL_WITH_CONTROLLERS_US;
         
         // Check if manual refresh was requested
         if (dashboard->isRefreshRequested()) {
@@ -270,7 +216,6 @@ int main() {
         }
 
         // Calculate sleep time to maintain desired polling frequency
-        // Target polling rate from config (default 1000 Hz = 1ms interval)
         double elapsedMicroseconds = TimingUtils::counterToMicroseconds(
             TimingUtils::getPerformanceCounter() - currentTime
         );
@@ -284,14 +229,7 @@ int main() {
     }
 
     // Cleanup
-    // Unhide all devices before exiting
-    if (virtualDeviceEmulator->isHidHideIntegrationEnabled()) {
-        for (const auto& deviceId : hiddenDeviceIds) {
-            virtualDeviceEmulator->removePhysicalDeviceFromHidHideBlacklist(deviceId);
-            std::cout << "Unhidden physical device: " << Logger::wstringToNarrow(deviceId) << std::endl;
-        }
-        virtualDeviceEmulator->disconnectHidHide();
-    }
+    deviceManager->cleanup();
 
     dashboard->stop();
     if (dashboardThread.joinable()) {
