@@ -77,6 +77,13 @@ int main() {
     translationLayer->setDebouncingEnabled(config.getBool("debouncing_enabled", false));
     translationLayer->setDebounceIntervalMs(config.getInt("debounce_interval_ms", 10));
     
+    // Load stick drift mitigation settings
+    translationLayer->setStickDeadzoneEnabled(config.getBool("stick_deadzone_enabled", true));
+    translationLayer->setLeftStickDeadzone(config.getFloat("left_stick_deadzone", 0.15f));
+    translationLayer->setRightStickDeadzone(config.getFloat("right_stick_deadzone", 0.15f));
+    translationLayer->setLeftStickAntiDeadzone(config.getFloat("left_stick_anti_deadzone", 0.0f));
+    translationLayer->setRightStickAntiDeadzone(config.getFloat("right_stick_anti_deadzone", 0.0f));
+    
     // Create virtual device emulator
     auto virtualDeviceEmulator = std::make_unique<VirtualDeviceEmulator>();
     
@@ -117,6 +124,11 @@ int main() {
         config.getBool("debouncing_enabled", false),
         targetType
     );
+    
+    // Sync stick drift settings to dashboard (read from translation layer)
+    if (translationLayer) {
+        // Dashboard will read these values from translation layer in updateUI()
+    }
 
     // Initialize modules
     if (!inputCapture->initialize()) {
