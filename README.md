@@ -52,7 +52,7 @@ Unlike basic wrappers, this project parses raw HID reports directly from the Win
 
 ## Architecture
 
-The system is built on a modular four-layer architecture designed for separation of concerns and speed:
+The system is built on a modular five-layer architecture designed for separation of concerns and speed:
 
 1.  **Input Capture Layer:** 
     *   Polls physical XInput devices via `XInputGetState`.
@@ -60,10 +60,14 @@ The system is built on a modular four-layer architecture designed for separation
 2.  **Translation Layer:**
     *   Normalizes disparate input formats into a standardized `TranslatedState`.
     *   Applies SOCD cleaning, deadzones, and remapping logic.
-3.  **Emulation Layer (Output):**
+3.  **Device Management Layer:**
+    *   Manages physical device hiding via HidHide integration.
+    *   Handles virtual device lifecycle (creation/destruction).
+    *   Tracks device state and prevents duplicate virtual devices.
+4.  **Emulation Layer (Output):**
     *   Interfaces with **ViGEmBus** to spawn virtual Xbox 360 or DualShock 4 controllers.
     *   Injects translated state into the OS kernel.
-4.  **Presentation Layer:**
+5.  **Presentation Layer:**
     *   Renders the CLI dashboard on a separate thread to ensure input processing never stalls.
 
 ## Getting Started
@@ -82,7 +86,7 @@ The system is built on a modular four-layer architecture designed for separation
 
 ### Building the Project
 
-This project includes automated scripts for easy building.
+This project includes an enhanced automated build script with professional features.
 
 **1. Clone the repository**
 ```bash
@@ -91,10 +95,36 @@ cd xinput-dinput-proxy
 ```
 
 **2. Run the Build Script**
-Simply execute the PowerShell script. It will detect your Visual Studio installation, configure CMake with Ninja, and build the project.
+
+The PowerShell build script automatically detects Visual Studio, configures CMake with Ninja, and builds the project with real-time output.
+
+**Basic build:**
 ```powershell
 .\build.ps1
 ```
+
+**Clean build:**
+```powershell
+.\build.ps1 -Clean
+```
+
+**Debug build:**
+```powershell
+.\build.ps1 -BuildType Debug
+```
+
+**Get help:**
+```powershell
+Get-Help .\build.ps1 -Full
+```
+
+The script features:
+- Automatic Visual Studio detection and environment setup
+- Real-time build output (no more frozen screens)
+- Colored status messages with clear feedback
+- Proper handling of paths with spaces
+- Comprehensive error reporting
+- Build artifact verification
 
 **Alternative: Manual Build**
 ```bash
@@ -166,11 +196,11 @@ ninja
 
 ## Contributing
 
-Contributions are welcome! Please follow the [Google C++ Style Guide](https://google.github.io/styleguide/cppguide.html) where possible.
+Contributions are welcome! Please follow the [Google C++ Style Guide](https://google.github.io/styleguide/cppguide.html) and our [Commit Style Guide](COMMIT_STYLE.txt).
 
 1.  Fork the Project
 2.  Create your Feature Branch (`git checkout -b feat/AmazingFeature`)
-3.  Commit your Changes (`git commit -m 'feat: Add some AmazingFeature'`)
+3.  Commit your Changes following [Conventional Commits](COMMIT_STYLE.txt) (`git commit -m 'feat: add some amazing feature'`)
 4.  Push to the Branch (`git push origin feat/AmazingFeature`)
 5.  Open a Pull Request
 
@@ -181,19 +211,37 @@ Contributions are welcome! Please follow the [Google C++ Style Guide](https://go
 git clone https://github.com/VishaL6i9/xinput-dinput-proxy.git
 cd xinput-dinput-proxy
 
-# Build the project
+# Build the project (Release)
 .\build.ps1
+
+# Build with debug symbols
+.\build.ps1 -BuildType Debug
+
+# Clean build
+.\build.ps1 -Clean
 
 # Run tests
 cd build
 ctest --output-on-failure
 ```
 
+### Code Quality
+
+The codebase follows modern C++20 practices with:
+- Comprehensive Doxygen-style documentation
+- Modular architecture with clear separation of concerns
+- Named constants instead of magic numbers
+- RAII and smart pointer usage throughout
+- Thread-safe operations with proper synchronization
+
 ## Documentation
 
 - [Configuration Reference](config.ini) - All available settings and their defaults
+- [Refactoring Summary](REFACTORING_SUMMARY.md) - Technical debt improvements and architecture changes
+- [Commit Style Guide](COMMIT_STYLE.txt) - Conventional commits specification for contributors
 - Settings are automatically saved and loaded from `config.ini` in the executable directory
 - Logs are saved with timestamps (e.g., `2026-02-07-173551.log`) for crash debugging
+- Comprehensive inline documentation in all core modules (Doxygen-style)
 
 ## Known Issues
 
