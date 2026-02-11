@@ -194,13 +194,36 @@ ninja
 | **CPU Usage** | < 1% | **< 0.5%** (Ryzen 5 5600X) |
 | **Memory Footprint** | Low | **~12 MB** |
 
+## Testing
+
+The project includes a comprehensive test suite covering all critical functionality:
+
+**Run tests:**
+```powershell
+.\run_tests.ps1
+```
+
+**Or using batch:**
+```bash
+.\run_tests.bat
+```
+
+The test suite includes 25 automated tests covering:
+- HID axis range normalization (8-bit, 10-bit, 16-bit)
+- SOCD cleaning (all 3 methods)
+- Debouncing bounds checking
+- XInput/DInput format conversion
+- Edge cases and error handling
+
+All tests verify technical debt fixes and pass successfully.
+
 ## Contributing
 
-Contributions are welcome! Please follow the [Google C++ Style Guide](https://google.github.io/styleguide/cppguide.html) and our [Commit Style Guide](COMMIT_STYLE.txt).
+Contributions are welcome! Please follow the [Google C++ Style Guide](https://google.github.io/styleguide/cppguide.html) and use [Conventional Commits](https://www.conventionalcommits.org/) for commit messages.
 
 1.  Fork the Project
 2.  Create your Feature Branch (`git checkout -b feat/AmazingFeature`)
-3.  Commit your Changes following [Conventional Commits](COMMIT_STYLE.txt) (`git commit -m 'feat: add some amazing feature'`)
+3.  Commit your Changes following Conventional Commits (`git commit -m 'feat: add some amazing feature'`)
 4.  Push to the Branch (`git push origin feat/AmazingFeature`)
 5.  Open a Pull Request
 
@@ -221,8 +244,7 @@ cd xinput-dinput-proxy
 .\build.ps1 -Clean
 
 # Run tests
-cd build
-ctest --output-on-failure
+.\run_tests.ps1
 ```
 
 ### Code Quality
@@ -234,11 +256,27 @@ The codebase follows modern C++20 practices with:
 - RAII and smart pointer usage throughout
 - Thread-safe operations with proper synchronization
 
+## Recent Updates (February 12, 2026)
+
+### Critical Fixes
+- **HID Axis Range Validation**: Fixed incorrect axis scaling for controllers with non-standard ranges (8-bit, 10-bit, 16-bit). Now properly detects and normalizes axis ranges from device capabilities instead of assuming 0-65535.
+- **Virtual Device Race Condition**: Resolved race condition in virtual device creation by creating ViGEm target before adding device to list, preventing null pointer access.
+- **Device Filtering**: Improved ViGEm device detection with multi-method validation (pattern matching + property checks) to prevent feedback loops.
+- **Overlapped I/O Error Handling**: Enhanced error handling to distinguish transient errors from fatal disconnections.
+
+### Build & Testing
+- **Automated Test Suite**: Added 25 comprehensive tests covering HID normalization, SOCD cleaning, debouncing, and edge cases.
+- **Test Runner Scripts**: New PowerShell and batch scripts (`run_tests.ps1`, `run_tests.bat`) for automated test execution.
+- **CMake Improvements**: Fixed conflicting compiler flags for debug builds (/RTC1 and /O2 incompatibility).
+
+### Cleanup
+- Removed legacy `build.bat` script (replaced by enhanced `build.ps1`)
+- Untracked commit style guide (personal preference file)
+
 ## Documentation
 
 - [Configuration Reference](config.ini) - All available settings and their defaults
 - [Refactoring Summary](REFACTORING_SUMMARY.md) - Technical debt improvements and architecture changes
-- [Commit Style Guide](COMMIT_STYLE.txt) - Conventional commits specification for contributors
 - Settings are automatically saved and loaded from `config.ini` in the executable directory
 - Logs are saved with timestamps (e.g., `2026-02-07-173551.log`) for crash debugging
 - Comprehensive inline documentation in all core modules (Doxygen-style)
