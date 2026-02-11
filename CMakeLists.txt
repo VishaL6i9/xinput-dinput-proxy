@@ -138,4 +138,19 @@ if(BUILD_TESTS)
         winmm.lib
     )
     add_test(NAME TranslationLayerTest COMMAND test_translation_layer)
+    
+    # Test for Stick Drift Mitigation
+    add_executable(test_stick_drift_mitigation
+        tests/test_stick_drift_mitigation.cpp
+        src/core/translation_layer.cpp
+        src/utils/timing.cpp
+    )
+    target_include_directories(test_stick_drift_mitigation PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(test_stick_drift_mitigation
+        hid.lib
+        winmm.lib
+    )
+    add_test(NAME StickDriftMitigationTest COMMAND test_stick_drift_mitigation)
 endif()
