@@ -39,6 +39,15 @@ void TranslationLayer::initializeProfiles() {
     
     m_deviceProfiles[ds4.productName] = ds4;
 }
+/**
+ * @brief Translates input states from various controller formats to a standardized format
+ * 
+ * This is the main translation function that processes all connected controllers.
+ * It handles both XInput and HID devices, applying SOCD cleaning and debouncing as configured.
+ * 
+ * @param inputStates Vector of raw controller states from InputCapture
+ * @return Vector of translated states ready for virtual device emulation
+ */
 std::vector<TranslatedState> TranslationLayer::translate(const std::vector<ControllerState>& inputStates) {
     std::vector<TranslatedState> translatedStates;
     
@@ -101,6 +110,20 @@ void TranslationLayer::setDebounceIntervalMs(int ms) {
     m_debounceIntervalMs = ms;
 }
 
+/**
+ * @brief Applies SOCD (Simultaneous Opposing Cardinal Directions) cleaning
+ * 
+ * SOCD cleaning resolves conflicts when opposing directions are pressed simultaneously
+ * (e.g., left+right or up+down). This is critical for competitive gaming to prevent
+ * unintended behavior.
+ * 
+ * Three methods are supported:
+ * - Method 0 (Last Win): The most recently pressed direction takes priority
+ * - Method 1 (First Win): The first pressed direction takes priority
+ * - Method 2 (Neutral): Both directions cancel out, resulting in neutral position
+ * 
+ * @param gamepad Reference to gamepad state to be modified in-place
+ */
 void TranslationLayer::applySOCDControl(TranslatedState::GamepadState& gamepad) {
     // SOCD stands for "Simultaneous Opposing Cardinal Directions"
     // This handles cases where both left and right (or up and down) are pressed simultaneously
@@ -168,6 +191,17 @@ void TranslationLayer::applySOCDControl(TranslatedState::GamepadState& gamepad) 
     }
 }
 
+/**
+ * @brief Applies input debouncing to filter mechanical switch noise
+ * 
+ * Debouncing prevents rapid button state changes caused by mechanical switch bounce.
+ * If a button state changes within the debounce interval, the change is ignored.
+ * 
+ * @param userId Controller user ID (0-15)
+ * @param currentButtons Current button state
+ * @param cleanedButtons Output parameter for debounced button state
+ * @return true if input should be processed, false if debouncing is active
+ */
 bool TranslationLayer::applyDebouncing(int userId, WORD currentButtons, WORD& cleanedButtons) {
     // Bounds check for fixed-size array
     if (userId < 0 || userId >= static_cast<int>(MAX_CONTROLLERS)) {
@@ -191,6 +225,15 @@ bool TranslationLayer::applyDebouncing(int userId, WORD currentButtons, WORD& cl
     return true;
 }
 
+/**
+ * @brief Converts XInput controller state to standardized format
+ * 
+ * XInput is already in our standard format, so this is mostly a direct copy
+ * with metadata population.
+ * 
+ * @param inputState Raw XInput controller state
+ * @return Standardized translated state
+ */
 TranslatedState TranslationLayer::convertXInputToStandard(const ControllerState& inputState) {
     TranslatedState state{};
     state.sourceUserId = inputState.userId;
@@ -212,6 +255,24 @@ TranslatedState TranslationLayer::convertXInputToStandard(const ControllerState&
     return state;
 }
 
+/**
+ * @brief Converts HID device state to standardized XInput-like format
+ * 
+ * This function handles the complex task of translating raw HID reports into
+ * a standardized gamepad format. It supports:
+ * - Device-specific profiles (e.g., DualShock 4, DualSense)
+ * - Generic HID gamepad fallback mapping
+ * - Axis normalization and inversion where needed
+ * 
+ * HID devices report axes in various ranges (0-255, 0-65535, etc.) and may
+ * have inverted Y-axes. This function normalizes everything to XInput conventions:
+ * - Axes: -32768 to 32767 (signed 16-bit)
+ * - Triggers: 0 to 255 (unsigned 8-bit)
+ * - Positive Y = up, Negative Y = down
+ * 
+ * @param inputState Raw HID controller state with parsed HID values
+ * @return Standardized translated state
+ */
 TranslatedState TranslationLayer::convertHIDToStandard(const ControllerState& inputState) {
     TranslatedState state{};
     state.sourceUserId = -1;
@@ -356,6 +417,16 @@ TranslationLayer::DInputState TranslationLayer::translateToDInput(const Translat
     return dinputState;
 }
 
+/**
+ * @brief Scales a 16-bit signed value to 32-bit signed (for DInput compatibility)
+ * 
+ * DInput uses LONG (32-bit) for axis values, but the effective range is often
+ * still 16-bit. This function safely converts SHORT to LONG while preserving
+ * the signed nature of the value.
+ * 
+ * @param value 16-bit signed input value (-32768 to 32767)
+ * @return 32-bit signed output value
+ */
 SHORT TranslationLayer::scaleLongToShort(LONG value) {
     // scale 32-bit (assumed -32768 to 32767 range usually, effectively 16-bit range in 32-bit container) 
     // OR 0-65535 range. 
@@ -373,6 +444,15 @@ SHORT TranslationLayer::scaleLongToShort(LONG value) {
     return static_cast<SHORT>(val);
 }
 
+/**
+ * @brief Scales a 32-bit signed value to 16-bit signed (for XInput compatibility)
+ * 
+ * Converts DInput's 32-bit LONG axis values to XInput's 16-bit SHORT format.
+ * Values are clamped to prevent overflow.
+ * 
+ * @param value 32-bit signed input value
+ * @return 16-bit signed output value (-32768 to 32767)
+ */
 LONG TranslationLayer::scaleShortToLong(SHORT value) {
     // Convert -32768..32767 to DInput 0..65535 ?
     // Or keep it signed -32768..32767?
