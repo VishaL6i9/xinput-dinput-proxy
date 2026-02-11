@@ -162,6 +162,24 @@ int VirtualDeviceEmulator::createVirtualDevice(TranslatedState::TargetType type,
         newId++;
     }
     
+    // Create the virtual device target BEFORE adding to list (prevents race condition)
+    void* target = nullptr;
+    bool success = false;
+    
+    if (type == TranslatedState::TARGET_XINPUT) {
+        target = createVirtualXInputDeviceTarget(userId);
+        success = (target != nullptr);
+    } else {
+        target = createVirtualDInputDeviceTarget(userId);
+        success = (target != nullptr);
+    }
+    
+    if (!success || target == nullptr) {
+        // Failed to create target - don't add to list
+        return -1;
+    }
+    
+    // Only add to list after successful target creation
     VirtualDevice newDevice;
     newDevice.id = newId;
     newDevice.type = type;
@@ -169,30 +187,16 @@ int VirtualDeviceEmulator::createVirtualDevice(TranslatedState::TargetType type,
     newDevice.sourceName = sourceName;
     newDevice.connected = true;
     newDevice.lastUpdate = TimingUtils::getPerformanceCounter();
-    newDevice.target = nullptr; // Will be set by specialized creator
+    newDevice.target = target;
     
-    // Add to list first so specialized creators can find it
     m_virtualDevices.push_back(newDevice);
     
-    bool success = false;
-    if (type == TranslatedState::TARGET_XINPUT) {
-        success = createVirtualXInputDevice(userId);
-    } else {
-        success = createVirtualDInputDevice(userId);
+    // Call callback if set
+    if (m_deviceCallback) {
+        m_deviceCallback(newId, true);
     }
     
-    if (success) {
-        // Call callback if set
-        if (m_deviceCallback) {
-            m_deviceCallback(newId, true);
-        }
-        return newId;
-    } else {
-        // Remove failed device
-        m_virtualDevices.erase(std::remove_if(m_virtualDevices.begin(), m_virtualDevices.end(), 
-            [newId](const VirtualDevice& d) { return d.id == newId; }), m_virtualDevices.end());
-        return -1;
-    }
+    return newId;
 }
 
 bool VirtualDeviceEmulator::destroyVirtualDevice(int deviceId) {
@@ -315,16 +319,17 @@ bool VirtualDeviceEmulator::initializeVirtualDevices() {
     return true;
 }
 
-bool VirtualDeviceEmulator::createVirtualXInputDevice(int userId) {
+void* VirtualDeviceEmulator::createVirtualXInputDeviceTarget(int userId) {
     if (!m_vigemClient) {
-        return false;
+        return nullptr;
     }
 
     // Create a new Xbox 360 controller target
     PVIGEM_TARGET x360Target = vigem_target_x360_alloc();
     if (!x360Target) {
         m_lastError = "vigem_target_x360_alloc failed (Out of memory).";
-        return false;
+        Logger::error("VirtualDeviceEmulator: " + m_lastError);
+        return nullptr;
     }
 
     VIGEM_ERROR error = vigem_target_add(static_cast<PVIGEM_CLIENT>(m_vigemClient), x360Target);
@@ -334,7 +339,7 @@ bool VirtualDeviceEmulator::createVirtualXInputDevice(int userId) {
         m_lastError = ss.str();
         Logger::error("VirtualDeviceEmulator: " + m_lastError);
         vigem_target_free(x360Target);
-        return false;
+        return nullptr;
     }
 
     // Register rumble notification
@@ -345,34 +350,21 @@ bool VirtualDeviceEmulator::createVirtualXInputDevice(int userId) {
         reinterpret_cast<LPVOID>(static_cast<uintptr_t>(userId))
     );
 
-    // Find the device created in createVirtualDevice and update its target.
-    // NOTE: m_devicesMutex is ALREADY HELD by createVirtualDevice calling us.
-    auto it = std::find_if(m_virtualDevices.begin(), m_virtualDevices.end(),
-                           [userId](const VirtualDevice& device) {
-                               return device.userId == userId && device.type == TranslatedState::TARGET_XINPUT && device.target == nullptr;
-                           });
-    if (it != m_virtualDevices.end()) {
-        it->target = x360Target;
-    } else {
-        Logger::error("VirtualDeviceEmulator: Could not find VirtualDevice record to assign XInput target.");
-        vigem_target_remove(static_cast<PVIGEM_CLIENT>(m_vigemClient), x360Target);
-        vigem_target_free(x360Target);
-        return false;
-    }
-
-    return true;
+    Logger::log("VirtualDeviceEmulator: Created XInput device for userId " + std::to_string(userId));
+    return static_cast<void*>(x360Target);
 }
 
-bool VirtualDeviceEmulator::createVirtualDInputDevice(int userId) {
+void* VirtualDeviceEmulator::createVirtualDInputDeviceTarget(int userId) {
     if (!m_vigemClient) {
-        return false;
+        return nullptr;
     }
 
     // Create a new DualShock 4 controller target
     PVIGEM_TARGET ds4Target = vigem_target_ds4_alloc();
     if (!ds4Target) {
         m_lastError = "vigem_target_ds4_alloc failed (Out of memory).";
-        return false;
+        Logger::error("VirtualDeviceEmulator: " + m_lastError);
+        return nullptr;
     }
 
     VIGEM_ERROR error = vigem_target_add(static_cast<PVIGEM_CLIENT>(m_vigemClient), ds4Target);
@@ -380,26 +372,13 @@ bool VirtualDeviceEmulator::createVirtualDInputDevice(int userId) {
         std::stringstream ss;
         ss << "vigem_target_add failed (Error 0x" << std::hex << error << std::dec << ")";
         m_lastError = ss.str();
+        Logger::error("VirtualDeviceEmulator: " + m_lastError);
         vigem_target_free(ds4Target);
-        return false;
+        return nullptr;
     }
 
-    // Find the device created in createVirtualDevice and update its target.
-    // NOTE: m_devicesMutex is ALREADY HELD by createVirtualDevice calling us.
-    auto it = std::find_if(m_virtualDevices.begin(), m_virtualDevices.end(),
-                           [userId](const VirtualDevice& device) {
-                               return device.userId == userId && device.type == TranslatedState::TARGET_DINPUT && device.target == nullptr;
-                           });
-    if (it != m_virtualDevices.end()) {
-        it->target = ds4Target;
-    } else {
-        Logger::error("VirtualDeviceEmulator: Could not find VirtualDevice record to assign DS4 target.");
-        vigem_target_remove(static_cast<PVIGEM_CLIENT>(m_vigemClient), ds4Target);
-        vigem_target_free(ds4Target);
-        return false;
-    }
-
-    return true;
+    Logger::log("VirtualDeviceEmulator: Created DInput (DS4) device for userId " + std::to_string(userId));
+    return static_cast<void*>(ds4Target);
 }
 
 bool VirtualDeviceEmulator::sendToVirtualXInputDevice(int userId, const XINPUT_STATE& state) {

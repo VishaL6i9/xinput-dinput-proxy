@@ -104,9 +104,9 @@ private:
     bool initializeInputInjection();
     bool initializeVirtualDevices();
 
-    // Methods for creating different types of virtual devices
-    bool createVirtualXInputDevice(int userId);
-    bool createVirtualDInputDevice(int userId);
+    // Methods for creating different types of virtual devices (return target handle or nullptr)
+    void* createVirtualXInputDeviceTarget(int userId);
+    void* createVirtualDInputDeviceTarget(int userId);
 
     // Methods for sending input to different device types
     bool sendToVirtualXInputDevice(int userId, const XINPUT_STATE& state);
