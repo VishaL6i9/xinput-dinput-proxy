@@ -22,6 +22,11 @@ Dashboard::Dashboard()
       m_rumbleTesting(false),
       m_lastRumbleTesting(false),
       m_refreshRequested(false),
+      m_stickDeadzoneEnabled(true),
+      m_leftStickDeadzone(0.15f),
+      m_rightStickDeadzone(0.15f),
+      m_leftStickAntiDeadzone(0.0f),
+      m_rightStickAntiDeadzone(0.0f),
       m_screen(ftxui::ScreenInteractive::Fullscreen()) {
     TimingUtils::initialize();
     m_lastUpdateTime = TimingUtils::getPerformanceCounter();
@@ -97,6 +102,13 @@ void Dashboard::loadSettings(bool translationEnabled, bool hidHideEnabled, bool 
     m_selectedSocd = socdMethod;
     m_debouncingEnabled = debouncingEnabled;
     m_selectedTargetType = targetType;
+    
+    // Load stick drift settings from translation layer if available
+    if (m_translationLayer) {
+        m_stickDeadzoneEnabled = true; // Will be synced from translation layer
+        m_leftStickDeadzone = m_translationLayer->getLeftStickDeadzone();
+        m_rightStickDeadzone = m_translationLayer->getRightStickDeadzone();
+    }
 }
 
 void Dashboard::initializeUI() {
@@ -119,6 +131,13 @@ void Dashboard::initializeUI() {
     auto debounce_toggle = Checkbox("Enable Debouncing", &m_debouncingEnabled);
     auto hidhide_toggle = Checkbox("Enable HidHide", &m_hidHideEnabled);
     auto translation_toggle = Checkbox("Enable Translation Layer", &m_translationEnabled);
+    
+    // 3.5. Stick Drift Mitigation
+    auto stick_deadzone_toggle = Checkbox("Enable Stick Drift Mitigation", &m_stickDeadzoneEnabled);
+    auto left_stick_slider = Slider("Left Stick DZ", &m_leftStickDeadzone, 0.0f, 0.5f, 0.01f);
+    auto right_stick_slider = Slider("Right Stick DZ", &m_rightStickDeadzone, 0.0f, 0.5f, 0.01f);
+    auto left_anti_slider = Slider("Left Anti-DZ", &m_leftStickAntiDeadzone, 0.0f, 0.3f, 0.01f);
+    auto right_anti_slider = Slider("Right Anti-DZ", &m_rightStickAntiDeadzone, 0.0f, 0.3f, 0.01f);
 
     // 4. Rumble Test with preset buttons
     m_rumbleBtnLabel = "START Rumble";
@@ -184,6 +203,12 @@ void Dashboard::initializeUI() {
         hidhide_toggle,
         translation_toggle,
         Renderer([&] { return separator(); }),
+        stick_deadzone_toggle,
+        left_stick_slider,
+        right_stick_slider,
+        left_anti_slider,
+        right_anti_slider,
+        Renderer([&] { return separator(); }),
         rumble_slider,
         rumble_btn,
         preset_25_btn,
@@ -205,6 +230,13 @@ void Dashboard::updateUI() {
         m_translationLayer->setSOCDCleaningEnabled(m_socdEnabled);
         m_translationLayer->setSOCDMethod(m_selectedSocd);
         m_translationLayer->setDebouncingEnabled(m_debouncingEnabled);
+        
+        // Sync stick drift mitigation settings
+        m_translationLayer->setStickDeadzoneEnabled(m_stickDeadzoneEnabled);
+        m_translationLayer->setLeftStickDeadzone(m_leftStickDeadzone);
+        m_translationLayer->setRightStickDeadzone(m_rightStickDeadzone);
+        m_translationLayer->setLeftStickAntiDeadzone(m_leftStickAntiDeadzone);
+        m_translationLayer->setRightStickAntiDeadzone(m_rightStickAntiDeadzone);
         
         // Target type determines which translation direction is enabled:
         // 0 = Xbox 360: Enable DInput->XInput (convert generic HID to Xbox)
@@ -270,6 +302,25 @@ ftxui::Element Dashboard::renderInteractiveControls() {
             m_mainContainer->ChildAt(0)->Render(), // socd_toggle (index 0)
             m_mainContainer->ChildAt(5)->Render(), // debounce_toggle (index 5)
             m_mainContainer->ChildAt(6)->Render(), // hidhide_toggle (index 6)
+            ftxui::separator(),
+            ftxui::text("Stick Drift Mitigation:") | ftxui::color(ftxui::Color::Yellow),
+            m_mainContainer->ChildAt(9)->Render(),  // stick_deadzone_toggle (index 9)
+            ftxui::hbox({
+                ftxui::text("L: " + std::to_string(static_cast<int>(m_leftStickDeadzone * 100)) + "% "),
+                m_mainContainer->ChildAt(10)->Render() | ftxui::flex, // left_stick_slider
+            }),
+            ftxui::hbox({
+                ftxui::text("R: " + std::to_string(static_cast<int>(m_rightStickDeadzone * 100)) + "% "),
+                m_mainContainer->ChildAt(11)->Render() | ftxui::flex, // right_stick_slider
+            }),
+            ftxui::hbox({
+                ftxui::text("L Anti: " + std::to_string(static_cast<int>(m_leftStickAntiDeadzone * 100)) + "% "),
+                m_mainContainer->ChildAt(12)->Render() | ftxui::flex, // left_anti_slider
+            }),
+            ftxui::hbox({
+                ftxui::text("R Anti: " + std::to_string(static_cast<int>(m_rightStickAntiDeadzone * 100)) + "% "),
+                m_mainContainer->ChildAt(13)->Render() | ftxui::flex, // right_anti_slider
+            }),
         }) | ftxui::border
     });
 }
@@ -286,26 +337,26 @@ ftxui::Element Dashboard::renderRumblePanel() {
             ftxui::text("Vibration/Rumble Test:") | ftxui::color(ftxui::Color::Yellow),
             ftxui::hbox({
                 ftxui::text("Intensity: " + std::to_string(intensityPercent) + "% "),
-                m_mainContainer->ChildAt(9)->Render() | ftxui::flex, // rumble_slider
+                m_mainContainer->ChildAt(15)->Render() | ftxui::flex, // rumble_slider (index 15)
             }),
             ftxui::hbox({
-                m_mainContainer->ChildAt(10)->Render(),  // rumble_btn (START/STOP)
+                m_mainContainer->ChildAt(16)->Render(),  // rumble_btn (START/STOP) (index 16)
                 ftxui::text(" "),
-                m_mainContainer->ChildAt(11)->Render(), // preset_25_btn
+                m_mainContainer->ChildAt(17)->Render(), // preset_25_btn (index 17)
                 ftxui::text(" "),
-                m_mainContainer->ChildAt(12)->Render(), // preset_50_btn
+                m_mainContainer->ChildAt(18)->Render(), // preset_50_btn (index 18)
                 ftxui::text(" "),
-                m_mainContainer->ChildAt(13)->Render(), // preset_75_btn
+                m_mainContainer->ChildAt(19)->Render(), // preset_75_btn (index 19)
                 ftxui::text(" "),
-                m_mainContainer->ChildAt(14)->Render(), // preset_100_btn
+                m_mainContainer->ChildAt(20)->Render(), // preset_100_btn (index 20)
             }),
             ftxui::separator(),
             ftxui::text("Device Management:") | ftxui::color(ftxui::Color::Yellow),
-            m_mainContainer->ChildAt(16)->Render(), // refresh_devices_btn
+            m_mainContainer->ChildAt(22)->Render(), // refresh_devices_btn (index 22)
             ftxui::separator(),
             ftxui::text("Status: " + m_statusMessage) | ftxui::dim,
             ftxui::filler(),
-            m_mainContainer->ChildAt(17)->Render(), // exit_btn
+            m_mainContainer->ChildAt(23)->Render(), // exit_btn (index 23)
         }) | ftxui::border
     });
 }
@@ -431,6 +482,10 @@ ftxui::Element Dashboard::renderStatusPanel() {
     std::string modeStr = "Xbox 360";
     if (m_selectedTargetType == 1) modeStr = "DualShock 4";
     else if (m_selectedTargetType == 2) modeStr = "Combined";
+    
+    std::string stickDriftStr = m_stickDeadzoneEnabled 
+        ? "L:" + std::to_string(static_cast<int>(m_leftStickDeadzone * 100)) + "% R:" + std::to_string(static_cast<int>(m_rightStickDeadzone * 100)) + "%"
+        : "Disabled";
 
     auto statusInfo = ftxui::vbox({
         ftxui::text("Service: Running") | ftxui::color(ftxui::Color::Green),
@@ -438,6 +493,7 @@ ftxui::Element Dashboard::renderStatusPanel() {
         ftxui::text("Emulation: " + modeStr),
         ftxui::text("SOCD: " + socdStr),
         ftxui::text(std::string("Debouncing: ") + (m_debouncingEnabled ? "Enabled" : "Disabled")),
+        ftxui::text("Stick Drift Fix: " + stickDriftStr),
         ftxui::text(std::string("HidHide: ") + (m_hidHideEnabled ? "Active" : "Inactive"))
     }) | ftxui::border;
     

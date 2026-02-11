@@ -90,6 +90,13 @@ private:
     std::string m_rumbleBtnLabel;
     bool m_refreshRequested;
     
+    // Stick drift mitigation settings
+    bool m_stickDeadzoneEnabled;
+    float m_leftStickDeadzone;
+    float m_rightStickDeadzone;
+    float m_leftStickAntiDeadzone;
+    float m_rightStickAntiDeadzone;
+    
     // Timing
     uint64_t m_lastUpdateTime;
     
