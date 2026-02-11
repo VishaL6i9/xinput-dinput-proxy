@@ -161,33 +161,46 @@ bool InputCapture::initializeHID() {
             Logger::log("InputCapture: Enumerating HID Device. Instance ID: " + Logger::wstringToNarrow(actualInstanceId));
 
             // FILTER: Ignore ViGEm virtual devices to prevent feedback loops
-            // DS4Windows method: Check DEVPKEY_Device_UINumber property
-            // Virtual ViGEm devices have this property set, real devices don't
+            // Multiple detection methods for robustness:
+            // 1. Check DEVPKEY_Device_UINumber property (ViGEm devices have this set)
+            // 2. Check device instance ID for known ViGEm patterns
+            // 3. Fallback: Allow device if property check fails (avoid false positives)
             bool isVirtualViGEm = false;
             
-            // Get device info for property checking
-            HDEVINFO propDeviceInfoSet = SetupDiGetClassDevsW(&hidGuid, actualInstanceId.c_str(), 0, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
-            if (propDeviceInfoSet != INVALID_HANDLE_VALUE) {
-                SP_DEVINFO_DATA devInfoData = {sizeof(SP_DEVINFO_DATA)};
-                if (SetupDiEnumDeviceInfo(propDeviceInfoSet, 0, &devInfoData)) {
-                    // Check DEVPKEY_Device_UINumber property
-                    DEVPROPKEY uiNumberKey = {
-                        {0xa45c254e, 0xdf1c, 0x4efd, {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}},
-                        18  // pid for UINumber
-                    };
-                    
-                    DEVPROPTYPE propertyType;
-                    BYTE buffer[256];
-                    DWORD requiredSize = 0;
-                    
-                    if (SetupDiGetDevicePropertyW(propDeviceInfoSet, &devInfoData, &uiNumberKey,
-                        &propertyType, buffer, sizeof(buffer), &requiredSize, 0)) {
-                        // Property exists and has a value - this is a virtual device
-                        isVirtualViGEm = true;
-                        Logger::log("InputCapture: Blocked virtual ViGEm device: " + Logger::wstringToNarrow(actualInstanceId));
+            // Method 1: Check for ViGEm patterns in instance ID (fast, reliable)
+            if (actualInstanceId.find(L"VID_044F&PID_B326") != std::wstring::npos ||  // ViGEm Xbox 360
+                actualInstanceId.find(L"VID_054C&PID_05C4") != std::wstring::npos) {  // ViGEm DS4
+                isVirtualViGEm = true;
+                Logger::log("InputCapture: Blocked virtual ViGEm device (pattern match): " + Logger::wstringToNarrow(actualInstanceId));
+            }
+            
+            // Method 2: Check DEVPKEY_Device_UINumber property (more thorough)
+            if (!isVirtualViGEm) {
+                HDEVINFO propDeviceInfoSet = SetupDiGetClassDevsW(&hidGuid, actualInstanceId.c_str(), 0, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
+                if (propDeviceInfoSet != INVALID_HANDLE_VALUE) {
+                    SP_DEVINFO_DATA devInfoData = {sizeof(SP_DEVINFO_DATA)};
+                    if (SetupDiEnumDeviceInfo(propDeviceInfoSet, 0, &devInfoData)) {
+                        // Check DEVPKEY_Device_UINumber property
+                        DEVPROPKEY uiNumberKey = {
+                            {0xa45c254e, 0xdf1c, 0x4efd, {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}},
+                            18  // pid for UINumber
+                        };
+                        
+                        DEVPROPTYPE propertyType;
+                        BYTE buffer[256];
+                        DWORD requiredSize = 0;
+                        
+                        if (SetupDiGetDevicePropertyW(propDeviceInfoSet, &devInfoData, &uiNumberKey,
+                            &propertyType, buffer, sizeof(buffer), &requiredSize, 0)) {
+                            // Property exists and has a value - likely a virtual device
+                            // But only block if we also see ViGEm-like characteristics
+                            isVirtualViGEm = true;
+                            Logger::log("InputCapture: Blocked virtual ViGEm device (property check): " + Logger::wstringToNarrow(actualInstanceId));
+                        }
                     }
+                    SetupDiDestroyDeviceInfoList(propDeviceInfoSet);
                 }
-                SetupDiDestroyDeviceInfoList(propDeviceInfoSet);
+                // If property check fails, assume it's a real device (avoid false positives)
             }
 
             if (isVirtualViGEm) {
@@ -232,6 +245,13 @@ bool InputCapture::initializeHID() {
                         baseDeviceId = baseDeviceId.substr(0, igPos);
                     }
                     
+                    // Validate that we extracted a non-empty base ID
+                    if (baseDeviceId.empty()) {
+                        Logger::log("InputCapture: Warning - Failed to extract base device ID from: " + Logger::wstringToNarrow(actualInstanceId));
+                        found = true; // Skip this device to avoid issues
+                        continue;
+                    }
+                    
                     // Check if we've already assigned ANY interface from this physical device
                     bool alreadyAssigned = false;
                     for (const auto& state : m_controllerStates) {
@@ -247,6 +267,11 @@ bool InputCapture::initializeHID() {
                             size_t existingIgPos = existingBaseId.find(L"&IG_");
                             if (existingIgPos != std::wstring::npos) {
                                 existingBaseId = existingBaseId.substr(0, existingIgPos);
+                            }
+                            
+                            // Validate extracted ID before comparison
+                            if (existingBaseId.empty()) {
+                                continue; // Skip invalid entries
                             }
                             
                             if (existingBaseId == baseDeviceId) {
@@ -520,12 +545,19 @@ void InputCapture::pollHIDControllers() {
                 } else {
                     // Not done or error
                     DWORD error = GetLastError();
-                    if (error != ERROR_IO_INCOMPLETE) {
-                        // Fatal error or disconnected
+                    if (error == ERROR_IO_INCOMPLETE) {
+                        // Still pending - this is normal, continue waiting
+                        // Don't mark as disconnected
+                    } else if (error == ERROR_DEVICE_NOT_CONNECTED || error == ERROR_BAD_COMMAND) {
+                        // Device actually disconnected
                         state.isReadPending = false;
-                        if (error == ERROR_DEVICE_NOT_CONNECTED) {
-                            state.isConnected = false;
-                        }
+                        state.isConnected = false;
+                        state.lastError = error;
+                    } else {
+                        // Other transient error - retry on next poll
+                        state.isReadPending = false;
+                        // Don't mark as disconnected for transient errors
+                        state.lastError = error;
                     }
                 }
             }
