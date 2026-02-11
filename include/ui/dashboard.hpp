@@ -30,6 +30,9 @@ public:
     void setTranslationLayer(TranslationLayer* layer) { 
         if (layer) m_translationLayer = layer; 
     }
+    void setInputCapture(InputCapture* capture) {
+        if (capture) m_inputCapture = capture;
+    }
     
     // Update statistics displayed on the dashboard
     void updateStats(uint64_t frameCount, double deltaTime, const std::vector<ControllerState>& states);
@@ -76,6 +79,7 @@ private:
     bool m_vigemAvailable;
     VirtualDeviceEmulator* m_emulator;
     TranslationLayer* m_translationLayer;
+    InputCapture* m_inputCapture;
     
     // Interactive State
     int m_selectedSocd;
@@ -96,6 +100,10 @@ private:
     float m_rightStickDeadzone;
     float m_leftStickAntiDeadzone;
     float m_rightStickAntiDeadzone;
+    
+    // Input logging
+    bool m_inputLoggingEnabled;
+    std::string m_loggingBtnLabel;
     
     // Timing
     uint64_t m_lastUpdateTime;

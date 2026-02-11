@@ -27,6 +27,8 @@ Dashboard::Dashboard()
       m_rightStickDeadzone(0.15f),
       m_leftStickAntiDeadzone(0.0f),
       m_rightStickAntiDeadzone(0.0f),
+      m_inputLoggingEnabled(false),
+      m_loggingBtnLabel("START Logging"),
       m_screen(ftxui::ScreenInteractive::Fullscreen()) {
     TimingUtils::initialize();
     m_lastUpdateTime = TimingUtils::getPerformanceCounter();
@@ -191,6 +193,17 @@ void Dashboard::initializeUI() {
         m_refreshRequested = true;
         m_statusMessage = "Device refresh requested...";
     });
+    
+    // 7. Input Logging Button
+    auto logging_btn = Button(&m_loggingBtnLabel, [&] {
+        m_inputLoggingEnabled = !m_inputLoggingEnabled;
+        if (m_inputCapture) {
+            m_inputCapture->enableInputLogging(m_inputLoggingEnabled);
+            
+            std::lock_guard<std::mutex> lock(m_statsMutex);
+            m_statusMessage = m_inputLoggingEnabled ? "Input logging ACTIVE (controller_input_log.csv)" : "Input logging stopped";
+        }
+    });
 
     // 6. Container Assembly
     m_mainContainer = Container::Vertical({
@@ -216,6 +229,7 @@ void Dashboard::initializeUI() {
         preset_75_btn,
         preset_100_btn,
         Renderer([&] { return separator(); }),
+        logging_btn,
         refresh_devices_btn,
         Button("Exit Application", [&] { stop(); })
     });
@@ -224,6 +238,7 @@ void Dashboard::initializeUI() {
 void Dashboard::updateUI() {
     // Sync UI labels
     m_rumbleBtnLabel = m_rumbleTesting ? "STOP Rumble" : "START Rumble";
+    m_loggingBtnLabel = m_inputLoggingEnabled ? "STOP Logging" : "START Logging";
 
     // Sync UI state to core modules
     if (m_translationLayer) {
@@ -352,11 +367,12 @@ ftxui::Element Dashboard::renderRumblePanel() {
             }),
             ftxui::separator(),
             ftxui::text("Device Management:") | ftxui::color(ftxui::Color::Yellow),
-            m_mainContainer->ChildAt(22)->Render(), // refresh_devices_btn (index 22)
+            m_mainContainer->ChildAt(22)->Render(), // logging_btn (index 22)
+            m_mainContainer->ChildAt(23)->Render(), // refresh_devices_btn (index 23)
             ftxui::separator(),
             ftxui::text("Status: " + m_statusMessage) | ftxui::dim,
             ftxui::filler(),
-            m_mainContainer->ChildAt(23)->Render(), // exit_btn (index 23)
+            m_mainContainer->ChildAt(24)->Render(), // exit_btn (index 24)
         }) | ftxui::border
     });
 }

@@ -101,6 +101,7 @@ int main() {
     auto dashboard = std::make_unique<Dashboard>();
     dashboard->setEmulator(virtualDeviceEmulator.get());
     dashboard->setTranslationLayer(translationLayer.get());
+    dashboard->setInputCapture(inputCapture.get());
     
     // Load dashboard settings from config
     // Calculate target type: 0=Xbox360, 1=DS4, 2=Combined
