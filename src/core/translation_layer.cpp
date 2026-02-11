@@ -18,6 +18,11 @@ TranslationLayer::TranslationLayer()
       m_socdMethod(2), // Neutral
       m_debouncingEnabled(false),
       m_debounceIntervalMs(10),
+      m_stickDeadzoneEnabled(true),
+      m_leftStickDeadzone(0.15f),
+      m_rightStickDeadzone(0.15f),
+      m_leftStickAntiDeadzone(0.0f),
+      m_rightStickAntiDeadzone(0.0f),
       m_lastButtonChangeTime{} {  // Initialize array to zeros
     initializeProfiles();
 }
@@ -80,6 +85,14 @@ std::vector<TranslatedState> TranslationLayer::translate(const std::vector<Contr
             }
         }
         
+        // Apply stick drift mitigation if enabled
+        if (m_stickDeadzoneEnabled) {
+            applyScaledRadialDeadzone(translatedState.gamepad.sThumbLX, translatedState.gamepad.sThumbLY, 
+                                     m_leftStickDeadzone, m_leftStickAntiDeadzone);
+            applyScaledRadialDeadzone(translatedState.gamepad.sThumbRX, translatedState.gamepad.sThumbRY, 
+                                     m_rightStickDeadzone, m_rightStickAntiDeadzone);
+        }
+        
         translatedStates.push_back(translatedState);
     }
     
@@ -108,6 +121,61 @@ void TranslationLayer::setDebouncingEnabled(bool enabled) {
 
 void TranslationLayer::setDebounceIntervalMs(int ms) {
     m_debounceIntervalMs = ms;
+}
+
+void TranslationLayer::setStickDeadzoneEnabled(bool enabled) {
+    m_stickDeadzoneEnabled = enabled;
+}
+
+void TranslationLayer::setLeftStickDeadzone(float deadzone) {
+    m_leftStickDeadzone = std::max(0.0f, std::min(1.0f, deadzone));
+}
+
+void TranslationLayer::setRightStickDeadzone(float deadzone) {
+    m_rightStickDeadzone = std::max(0.0f, std::min(1.0f, deadzone));
+}
+
+void TranslationLayer::setLeftStickAntiDeadzone(float antiDeadzone) {
+    m_leftStickAntiDeadzone = std::max(0.0f, std::min(1.0f, antiDeadzone));
+}
+
+void TranslationLayer::setRightStickAntiDeadzone(float antiDeadzone) {
+    m_rightStickAntiDeadzone = std::max(0.0f, std::min(1.0f, antiDeadzone));
+}
+
+void TranslationLayer::applyScaledRadialDeadzone(SHORT& thumbX, SHORT& thumbY, float deadzone, float antiDeadzone) {
+    // Normalize to -1.0 to 1.0 range
+    float x = static_cast<float>(thumbX) / 32767.0f;
+    float y = static_cast<float>(thumbY) / 32767.0f;
+    
+    // Calculate magnitude
+    float magnitude = std::sqrt(x * x + y * y);
+    
+    // If magnitude is below deadzone, zero out the input
+    if (magnitude < deadzone) {
+        thumbX = 0;
+        thumbY = 0;
+        return;
+    }
+    
+    // Calculate normalized direction
+    float directionX = (magnitude > 0.0f) ? (x / magnitude) : 0.0f;
+    float directionY = (magnitude > 0.0f) ? (y / magnitude) : 0.0f;
+    
+    // Scale magnitude from [deadzone, 1.0] to [0.0, 1.0]
+    float normalizedMagnitude = (magnitude - deadzone) / (1.0f - deadzone);
+    
+    // Apply anti-deadzone (adds minimum output when stick moves past deadzone)
+    if (antiDeadzone > 0.0f && normalizedMagnitude > 0.0f) {
+        normalizedMagnitude = antiDeadzone + (1.0f - antiDeadzone) * normalizedMagnitude;
+    }
+    
+    // Clamp to valid range
+    normalizedMagnitude = std::min(1.0f, normalizedMagnitude);
+    
+    // Convert back to SHORT range
+    thumbX = static_cast<SHORT>(directionX * normalizedMagnitude * 32767.0f);
+    thumbY = static_cast<SHORT>(directionY * normalizedMagnitude * 32767.0f);
 }
 
 /**

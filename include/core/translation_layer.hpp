@@ -79,6 +79,15 @@ public:
     void setDebouncingEnabled(bool enabled);
     void setDebounceIntervalMs(int ms);
     
+    // Stick drift mitigation
+    void setStickDeadzoneEnabled(bool enabled);
+    void setLeftStickDeadzone(float deadzone);
+    void setRightStickDeadzone(float deadzone);
+    void setLeftStickAntiDeadzone(float antiDeadzone);
+    void setRightStickAntiDeadzone(float antiDeadzone);
+    float getLeftStickDeadzone() const { return m_leftStickDeadzone; }
+    float getRightStickDeadzone() const { return m_rightStickDeadzone; }
+    
     // Translate standardized state to XInput format
     XINPUT_STATE translateToXInput(const TranslatedState& state);
     
@@ -116,6 +125,13 @@ private:
     int m_socdMethod;  // 0: Last Win, 1: First Win, 2: Neutral
     bool m_debouncingEnabled;
     int m_debounceIntervalMs;
+    
+    // Stick drift mitigation settings
+    bool m_stickDeadzoneEnabled;
+    float m_leftStickDeadzone;
+    float m_rightStickDeadzone;
+    float m_leftStickAntiDeadzone;
+    float m_rightStickAntiDeadzone;
 
     // Internal state for debouncing (fixed size to prevent unbounded growth)
     static constexpr size_t MAX_CONTROLLERS = 16;
@@ -126,6 +142,9 @@ private:
 
     // Apply debouncing to a gamepad state
     bool applyDebouncing(int userId, WORD currentButtons, WORD& cleanedButtons);
+    
+    // Apply scaled radial deadzone to stick axes
+    void applyScaledRadialDeadzone(SHORT& thumbX, SHORT& thumbY, float deadzone, float antiDeadzone);
 
     // Convert XInput state to standardized format
     TranslatedState convertXInputToStandard(const ControllerState& inputState);
