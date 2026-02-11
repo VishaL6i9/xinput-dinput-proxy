@@ -1,10 +1,15 @@
 # Build directories
 build/
 cmake-build*/
+out/
 
 # IDE files
 .idea/
 .vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
 
 # Log files
 *.log
@@ -15,6 +20,9 @@ cmake-build*/
 *.lib
 *.obj
 *.o
+*.pdb
+*.ilk
+*.exp
 
 # CMake files
 CMakeCache.txt
@@ -22,17 +30,20 @@ CMakeFiles/
 CMakeScripts/
 Makefile
 cmake_install.cmake
+install_manifest.txt
 
 # Ninja files
 .ninja_log
 .ninja_deps
 build.ninja
+rules.ninja
 
 # Temporary files
 *.tmp
 *.temp
 .DS_Store
 Thumbs.db
+*~
 
 # Crash dumps
 *.dmp
@@ -43,6 +54,8 @@ DS4Windows-jay/
 # Utility and test files (not part of main project)
 cleanup_vigem.cpp
 hidhide_test.cpp
+hidhide_test.obj
+hidhide_test.exe
 
 # Incomplete/future features
 include/utils/device_profile_loader.hpp
