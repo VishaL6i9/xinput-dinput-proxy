@@ -118,6 +118,11 @@ public:
     
     // Output control
     void setVibration(int userId, float leftMotor, float rightMotor);
+    
+    // Input logging
+    void enableInputLogging(bool enabled);
+    void setLogFilePath(const std::string& path);
+    bool isLoggingEnabled() const { return m_loggingEnabled; }
 
     // Debugging
     // void getStartupLogs() removed in favor of unified Logger
@@ -147,4 +152,12 @@ private:
     void parseHIDReport(ControllerState& state, PCHAR report, ULONG reportLength);
     void getHIDUsages(ControllerState& state, PCHAR report, ULONG reportLength);
     void getHIDValues(ControllerState& state, PCHAR report, ULONG reportLength);
+    
+    // Input logging
+    bool m_loggingEnabled;
+    std::string m_logFilePath;
+    std::ofstream m_logFile;
+    uint64_t m_logStartTime;
+    uint64_t m_logSampleCount;
+    void logInputState(const ControllerState& state);
 };

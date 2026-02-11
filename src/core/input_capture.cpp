@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <sstream>
 #include <iostream>
+#include <fstream>
+#include <iomanip>
 #include <objbase.h>
 #include <windows.h>
 #include <hidsdi.h>
@@ -12,13 +14,25 @@
 #include <cfgmgr32.h>
 
 InputCapture::InputCapture() 
-    : m_running(false), m_lastPollTime(0) {
+    : m_running(false), 
+      m_lastPollTime(0),
+      m_loggingEnabled(false),
+      m_logFilePath("controller_input_log.csv"),
+      m_logStartTime(0),
+      m_logSampleCount(0) {
     // Initialize COM for HID operations
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 }
 
 InputCapture::~InputCapture() {
     shutdown();
+    
+    // Close log file if open
+    if (m_logFile.is_open()) {
+        m_logFile.close();
+        Logger::log("Input logging stopped. Total samples: " + std::to_string(m_logSampleCount));
+    }
+    
     CoUninitialize();
 }
 
@@ -64,6 +78,16 @@ void InputCapture::shutdown() {
 void InputCapture::update(double deltaTime) {
     pollXInputControllers();
     pollHIDControllers();
+    
+    // Log input states if logging is enabled
+    if (m_loggingEnabled) {
+        std::lock_guard<std::mutex> lock(m_statesMutex);
+        for (const auto& state : m_controllerStates) {
+            if (state.isConnected) {
+                logInputState(state);
+            }
+        }
+    }
     
     m_lastPollTime = TimingUtils::getPerformanceCounter();
 }
@@ -659,4 +683,100 @@ std::wstring InputCapture::extractDeviceInstanceId(const std::wstring& devicePat
         }
     }
     return L"";
+}
+
+void InputCapture::enableInputLogging(bool enabled) {
+    std::lock_guard<std::mutex> lock(m_statesMutex);
+    
+    if (enabled && !m_loggingEnabled) {
+        // Start logging
+        m_logFile.open(m_logFilePath, std::ios::out | std::ios::trunc);
+        if (!m_logFile.is_open()) {
+            Logger::error("Failed to open log file: " + m_logFilePath);
+            return;
+        }
+        
+        // Write CSV header
+        m_logFile << "Timestamp_ms,Controller_ID,Controller_Name,";
+        m_logFile << "LX_Raw,LY_Raw,RX_Raw,RY_Raw,";
+        m_logFile << "LX_Normalized,LY_Normalized,RX_Normalized,RY_Normalized,";
+        m_logFile << "LT,RT,Buttons_Hex,";
+        m_logFile << "Packet_Number,Is_Connected,Error_Code\n";
+        
+        m_logStartTime = TimingUtils::getPerformanceCounter();
+        m_logSampleCount = 0;
+        m_loggingEnabled = true;
+        
+        Logger::log("Input logging started: " + m_logFilePath);
+    } else if (!enabled && m_loggingEnabled) {
+        // Stop logging
+        if (m_logFile.is_open()) {
+            m_logFile.close();
+        }
+        m_loggingEnabled = false;
+        
+        Logger::log("Input logging stopped. Total samples: " + std::to_string(m_logSampleCount));
+    }
+}
+
+void InputCapture::setLogFilePath(const std::string& path) {
+    std::lock_guard<std::mutex> lock(m_statesMutex);
+    
+    if (m_loggingEnabled) {
+        Logger::error("Cannot change log file path while logging is active");
+        return;
+    }
+    
+    m_logFilePath = path;
+}
+
+void InputCapture::logInputState(const ControllerState& state) {
+    if (!m_loggingEnabled || !m_logFile.is_open()) {
+        return;
+    }
+    
+    // Calculate elapsed time in milliseconds
+    uint64_t currentTime = TimingUtils::getPerformanceCounter();
+    double elapsedMs = TimingUtils::counterToMicroseconds(currentTime - m_logStartTime) / 1000.0;
+    
+    // Convert controller name from wstring to string
+    std::string controllerName;
+    for (wchar_t wc : state.productName) {
+        controllerName += static_cast<char>(wc);
+    }
+    if (controllerName.empty()) {
+        controllerName = (state.userId >= 0) ? "XInput_Controller" : "HID_Device";
+    }
+    
+    // Get stick values
+    SHORT lx = state.xinputState.Gamepad.sThumbLX;
+    SHORT ly = state.xinputState.Gamepad.sThumbLY;
+    SHORT rx = state.xinputState.Gamepad.sThumbRX;
+    SHORT ry = state.xinputState.Gamepad.sThumbRY;
+    
+    // Normalize to -1.0 to 1.0 range
+    float lx_norm = lx / 32767.0f;
+    float ly_norm = ly / 32767.0f;
+    float rx_norm = rx / 32767.0f;
+    float ry_norm = ry / 32767.0f;
+    
+    // Write CSV row
+    m_logFile << std::fixed << std::setprecision(3) << elapsedMs << ",";
+    m_logFile << state.userId << ",";
+    m_logFile << "\"" << controllerName << "\",";
+    m_logFile << lx << "," << ly << "," << rx << "," << ry << ",";
+    m_logFile << std::setprecision(6) << lx_norm << "," << ly_norm << "," << rx_norm << "," << ry_norm << ",";
+    m_logFile << static_cast<int>(state.xinputState.Gamepad.bLeftTrigger) << ",";
+    m_logFile << static_cast<int>(state.xinputState.Gamepad.bRightTrigger) << ",";
+    m_logFile << "0x" << std::hex << state.xinputState.Gamepad.wButtons << std::dec << ",";
+    m_logFile << state.xinputState.dwPacketNumber << ",";
+    m_logFile << (state.isConnected ? "1" : "0") << ",";
+    m_logFile << state.lastError << "\n";
+    
+    m_logSampleCount++;
+    
+    // Flush every 100 samples to ensure data is written
+    if (m_logSampleCount % 100 == 0) {
+        m_logFile.flush();
+    }
 }
