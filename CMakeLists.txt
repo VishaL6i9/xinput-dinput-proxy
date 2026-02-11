@@ -11,17 +11,24 @@ endif()
 
 # Compiler-specific options
 if(MSVC)
-    # MSVC-specific flags for performance
-    add_compile_options(/O2 /Ob2 /Oi /Ot /arch:AVX2 /EHsc)
+    # MSVC-specific flags
+    add_compile_options(/EHsc)
     add_compile_options(/wd4005)  # Disable macro redefinition warnings
     add_compile_definitions(NOMINMAX)
     add_compile_definitions(WIN32_LEAN_AND_MEAN)
     
     # Use Static Runtime (/MT) to match ViGEmClient.lib
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    
+    # Performance flags only for Release builds
+    if(CMAKE_BUILD_TYPE STREQUAL "Release")
+        add_compile_options(/O2 /Ob2 /Oi /Ot /arch:AVX2)
+    endif()
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    # GCC/Clang flags for performance
-    add_compile_options(-O3 -march=native -mtune=native)
+    # GCC/Clang flags for performance (Release only)
+    if(CMAKE_BUILD_TYPE STREQUAL "Release")
+        add_compile_options(-O3 -march=native -mtune=native)
+    endif()
 endif()
 
 # Add FTXUI as a subdirectory (assuming it's cloned in ext/)
