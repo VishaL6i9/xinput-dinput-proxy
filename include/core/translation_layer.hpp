@@ -1,3 +1,10 @@
+/**
+ * @file translation_layer.hpp
+ * @brief Input translation and normalization layer
+ * 
+ * This module translates between different controller input formats (XInput, DirectInput, HID)
+ * and applies advanced input processing like SOCD cleaning and debouncing.
+ */
 #pragma once
 
 #include <vector>
@@ -6,7 +13,13 @@
 #include <array>
 #include "core/input_capture.hpp"
 
-// Structure to hold translated input state
+/**
+ * @struct TranslatedState
+ * @brief Standardized controller state after translation
+ * 
+ * This structure represents a controller's state in a normalized format
+ * that can be sent to either XInput or DirectInput virtual devices.
+ */
 struct TranslatedState {
     int sourceUserId;  // Original controller ID
     bool isXInputSource;  // True if source was XInput, false if HID
@@ -32,6 +45,18 @@ struct TranslatedState {
     } targetType;
 };
 
+/**
+ * @class TranslationLayer
+ * @brief Bidirectional input translation between XInput and DirectInput formats
+ * 
+ * Features:
+ * - XInput to DirectInput translation (Xbox → DualShock 4)
+ * - DirectInput to XInput translation (Generic HID → Xbox 360)
+ * - SOCD (Simultaneous Opposing Cardinal Directions) cleaning
+ * - Input debouncing for mechanical switch noise filtering
+ * - Device-specific profiles for optimal compatibility
+ * - Safe axis scaling to prevent truncation errors
+ */
 class TranslationLayer {
 public:
     TranslationLayer();

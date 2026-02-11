@@ -1,3 +1,11 @@
+/**
+ * @file virtual_device_emulator.hpp
+ * @brief Virtual controller device emulation using ViGEmBus
+ * 
+ * This module creates and manages virtual Xbox 360 and DualShock 4 controllers
+ * using the ViGEmBus kernel driver. It also integrates with HidHide for
+ * physical device masking.
+ */
 #pragma once
 
 #include <vector>
@@ -26,6 +34,18 @@ extern "C" {
 // Forward declaration for HidHide controller
 class HidHideController;
 
+/**
+ * @class VirtualDeviceEmulator
+ * @brief Manages virtual controller devices via ViGEmBus driver
+ * 
+ * Features:
+ * - Dynamic virtual device creation/destruction
+ * - Support for Xbox 360 and DualShock 4 emulation
+ * - Rumble/vibration passthrough from games to physical controllers
+ * - HidHide integration for physical device masking
+ * - Thread-safe device management
+ * - Automatic cleanup on shutdown
+ */
 class VirtualDeviceEmulator {
 public:
     VirtualDeviceEmulator();

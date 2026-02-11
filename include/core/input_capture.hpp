@@ -1,3 +1,10 @@
+/**
+ * @file input_capture.hpp
+ * @brief Input capture layer for physical controller polling
+ * 
+ * This module handles low-level input capture from both XInput and HID devices.
+ * It provides thread-safe polling at high frequencies (1000Hz+) with minimal latency.
+ */
 #pragma once
 
 #include <vector>
@@ -20,7 +27,16 @@
 #include <windows.gaming.input.h>
 #endif
 
-// Custom types
+/**
+ * @struct ControllerState
+ * @brief Unified state representation for both XInput and HID controllers
+ * 
+ * This structure holds all relevant data for a single controller, including:
+ * - XInput state (for Xbox controllers)
+ * - HID device information and parsed reports
+ * - Device metadata (name, path, instance ID)
+ * - Timing information for latency tracking
+ */
 struct ControllerState {
     int userId;  // For XInput (0-3)
     DWORD xinputPacketNumber;
@@ -69,6 +85,18 @@ struct ControllerState {
     uint64_t timestamp;
 };
 
+/**
+ * @class InputCapture
+ * @brief High-performance input capture system for physical controllers
+ * 
+ * Features:
+ * - Simultaneous XInput and HID device polling
+ * - Thread-safe state management with mutex protection
+ * - Hot-plug device detection and enumeration
+ * - Raw HID report parsing using Windows HID API
+ * - Sub-millisecond polling latency
+ * - Vibration/rumble output support
+ */
 class InputCapture {
 public:
     InputCapture();
