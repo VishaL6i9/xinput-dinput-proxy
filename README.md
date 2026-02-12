@@ -287,13 +287,18 @@ The codebase follows modern C++20 practices with:
 
 2. **Administrator Privileges**: Required for ViGEmBus and HidHide driver access. The application will not function properly without elevated permissions.
 
-3. **Controller Limit**: Maximum 4 XInput controllers supported (Windows limitation). Additional HID devices can be detected but won't be assigned to XInput slots.
+3. **XInput Device Hiding Limitation**: HidHide can only hide HID devices. XInput controllers (Xbox 360/One controllers) accessed via the XInput API cannot be hidden from games because XInput bypasses the HID layer entirely. This means:
+   - **XInput→DInput translation**: The physical Xbox controller will still be visible to games via XInput API, potentially causing double input
+   - **DInput→XInput translation**: Works perfectly - the physical DInput device (DS4, DualSense, generic HID) can be hidden successfully
+   - **Workaround for XInput→DInput**: Disable XInput support in game settings if available, or accept that both controllers will be visible
 
-4. **Bluetooth Latency**: Bluetooth controllers have higher latency than USB. For competitive gaming, USB connection is recommended.
+4. **Controller Limit**: Maximum 4 XInput controllers supported (Windows limitation). Additional HID devices can be detected but won't be assigned to XInput slots.
 
-5. **Multiple HID Interfaces**: Xbox controllers expose multiple HID interfaces (IG_01, IG_02, IG_03, etc.). The proxy correctly filters these and only creates one virtual device per physical controller.
+5. **Bluetooth Latency**: Bluetooth controllers have higher latency than USB. For competitive gaming, USB connection is recommended.
 
-6. **HidHide Compatibility**: This proxy uses DS4Windows-compatible IOCTL codes (0x8001xxxx) for HidHide v1.x. Works in both blacklist mode (inverse OFF) and whitelist mode (inverse ON). For whitelist mode, add the proxy executable to HidHide's application whitelist.
+6. **Multiple HID Interfaces**: Xbox controllers expose multiple HID interfaces (IG_01, IG_02, IG_03, etc.). The proxy correctly filters these and only creates one virtual device per physical controller.
+
+7. **HidHide Compatibility**: This proxy uses DS4Windows-compatible IOCTL codes (0x8001xxxx) for HidHide v1.x. Works in both blacklist mode (inverse OFF) and whitelist mode (inverse ON). For whitelist mode, add the proxy executable to HidHide's application whitelist.
 
 ## License
 
