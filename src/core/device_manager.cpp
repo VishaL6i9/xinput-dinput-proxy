@@ -1,6 +1,9 @@
 #include "core/device_manager.hpp"
 #include "utils/logger.hpp"
 #include <iostream>
+#include <thread>
+#include <chrono>
+#include <set>
 
 DeviceManager::DeviceManager(
     VirtualDeviceEmulator* emulator,
@@ -16,9 +19,27 @@ void DeviceManager::processDevices(
 ) {
     for (const auto& state : inputStates) {
         if (state.isConnected) {
-            // Hide physical device if HidHide is enabled
-            if (hidHideEnabled && m_emulator->isHidHideIntegrationEnabled()) {
-                hidePhysicalDevice(state);
+            // Only hide DInput devices (userId < 0) when translating to XInput
+            // XInput devices (userId >= 0) cannot be hidden via HidHide as they use XInput API
+            bool shouldHide = hidHideEnabled && 
+                            m_emulator->isHidHideIntegrationEnabled() &&
+                            state.userId < 0 &&  // DInput device
+                            m_translationLayer->isDInputToXInputEnabled();  // Translating to XInput
+            
+            if (shouldHide) {
+                bool wasHidden = hidePhysicalDevice(state);
+                
+                // If we just hid the device, give Windows a moment to process it
+                // This prevents games from detecting both devices simultaneously
+                if (wasHidden && m_hiddenDeviceIds.find(state.deviceInstanceId) != m_hiddenDeviceIds.end()) {
+                    // Check if this is the first time we're hiding this device
+                    static std::set<std::wstring> devicesHiddenThisSession;
+                    if (devicesHiddenThisSession.find(state.deviceInstanceId) == devicesHiddenThisSession.end()) {
+                        devicesHiddenThisSession.insert(state.deviceInstanceId);
+                        Logger::log("Waiting for HidHide to take effect before creating virtual device...");
+                        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    }
+                }
             }
 
             // Create virtual devices if translation is enabled
@@ -35,6 +56,18 @@ void DeviceManager::processDevices(
 bool DeviceManager::hidePhysicalDevice(const ControllerState& state) {
     // Skip if device ID is empty or already processed
     if (state.deviceInstanceId.empty()) {
+        return false;
+    }
+
+    // Check if this is an XInput device (userId >= 0)
+    if (state.userId >= 0) {
+        // Log once per device that XInput devices cannot be hidden
+        static std::set<std::wstring> xInputWarningLogged;
+        if (xInputWarningLogged.find(state.deviceInstanceId) == xInputWarningLogged.end()) {
+            xInputWarningLogged.insert(state.deviceInstanceId);
+            Logger::log("INFO: XInput device cannot be hidden via HidHide (XInput API bypasses HID layer)");
+            Logger::log("      Device: " + Logger::wstringToNarrow(state.deviceInstanceId));
+        }
         return false;
     }
 
