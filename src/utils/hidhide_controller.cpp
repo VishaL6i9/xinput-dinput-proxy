@@ -56,13 +56,14 @@ bool HidHideController::connect() {
     Logger::log(ss.str());
     
     // Try to check if driver is active
-    BOOL active = FALSE;
+    // Note: HidHide expects BOOLEAN (1 byte), not BOOL (4 bytes)
+    BOOLEAN active = FALSE;
     DWORD bytesReturned = 0;
     BOOL result = DeviceIoControl(
         m_driverHandle,
         IOCTL_GET_ACTIVE,
         nullptr, 0,
-        &active, sizeof(active),
+        &active, sizeof(BOOLEAN),  // Must be 1 byte, not sizeof(BOOL)
         &bytesReturned,
         NULL
     );
@@ -70,19 +71,38 @@ bool HidHideController::connect() {
     if (result) {
         Logger::log("Debug: HidHide active state: " + std::string(active ? "ACTIVE" : "INACTIVE"));
         Logger::log("Debug: Bytes returned: " + std::to_string(bytesReturned));
+        
+        // If not active, try to activate it
+        if (!active) {
+            Logger::log("INFO: HidHide is not active. Attempting to activate...");
+            if (setActive(true)) {
+                Logger::log("INFO: Successfully activated HidHide driver.");
+            } else {
+                Logger::log("WARNING: Could not activate HidHide driver. Device hiding may not work.");
+            }
+        }
     } else {
         DWORD err = GetLastError();
-        Logger::log("Debug: Could not query HidHide active state. Error: " + std::to_string(err));
+        Logger::log("WARNING: Could not query HidHide active state (Error: " + std::to_string(err) + ")");
+        Logger::log("INFO: Attempting to force-activate HidHide anyway...");
+        
+        // Try to activate it anyway - maybe the query IOCTL is wrong but set works
+        if (setActive(true)) {
+            Logger::log("INFO: Successfully activated HidHide driver.");
+        } else {
+            Logger::log("WARNING: Could not activate HidHide driver. Device hiding may not work.");
+            Logger::log("HINT: Please manually enable HidHide using the HidHide Configuration Client.");
+        }
     }
     
     // Check inverse mode
-    BOOL inverse = FALSE;
+    BOOLEAN inverse = FALSE;
     bytesReturned = 0;
     result = DeviceIoControl(
         m_driverHandle,
         IOCTL_GET_WLINVERSE,
         nullptr, 0,
-        &inverse, sizeof(inverse),
+        &inverse, sizeof(BOOLEAN),  // Must be 1 byte, not sizeof(BOOL)
         &bytesReturned,
         NULL
     );
@@ -99,7 +119,8 @@ bool HidHideController::connect() {
         }
     } else {
         DWORD err = GetLastError();
-        Logger::log("Debug: Could not query HidHide inverse mode. Error: " + std::to_string(err));
+        Logger::log("WARNING: Could not query HidHide inverse mode (Error: " + std::to_string(err) + ")");
+        Logger::log("INFO: Assuming blacklist mode (inverse OFF) - this is the recommended configuration.");
     }
     
     return true;
@@ -346,23 +367,28 @@ bool HidHideController::addProcessToWhitelist(const std::wstring& processPath) {
     // Add the new process to the list
     currentList.push_back(processPath);
 
-    // Prepare the buffer for the new list
-    size_t totalSize = sizeof(ULONG); // Count
+    // Build double-null-terminated string buffer (same format as blacklist)
+    std::vector<BYTE> buffer;
     for (const auto& path : currentList) {
-        totalSize += (path.length() + 1) * sizeof(WCHAR); // Include null terminator
+        // Add string bytes
+        const BYTE* strBytes = reinterpret_cast<const BYTE*>(path.c_str());
+        size_t strSize = (path.length() + 1) * sizeof(WCHAR); // Include null terminator
+        buffer.insert(buffer.end(), strBytes, strBytes + strSize);
     }
+    // Add final null terminator
+    WCHAR finalNull = L'\0';
+    const BYTE* nullBytes = reinterpret_cast<const BYTE*>(&finalNull);
+    buffer.insert(buffer.end(), nullBytes, nullBytes + sizeof(WCHAR));
 
-    std::vector<BYTE> buffer(totalSize);
-    ULONG* countPtr = reinterpret_cast<ULONG*>(buffer.data());
-    *countPtr = static_cast<ULONG>(currentList.size());
-
-    WCHAR* pathPtr = reinterpret_cast<WCHAR*>(buffer.data() + sizeof(ULONG));
-    for (const auto& path : currentList) {
-        wcscpy_s(pathPtr, path.length() + 1, path.c_str());
-        pathPtr += path.length() + 1;
-    }
-
-    bool result = sendIoctl(IOCTL_SET_WHITELIST, buffer.data(), static_cast<DWORD>(buffer.size()));
+    DWORD bytesReturned = 0;
+    bool result = DeviceIoControl(
+        m_driverHandle,
+        IOCTL_SET_WHITELIST,
+        buffer.data(), static_cast<DWORD>(buffer.size()),
+        nullptr, 0,
+        &bytesReturned,
+        NULL
+    ) == TRUE;
     
     if (result) {
         Logger::log("Added process to HidHide whitelist: " + Logger::wstringToNarrow(processPath));
@@ -390,21 +416,17 @@ bool HidHideController::removeProcessFromWhitelist(const std::wstring& processPa
         return true;
     }
 
-    // Prepare the buffer for the updated list
-    size_t totalSize = sizeof(ULONG); // Count
+    // Build double-null-terminated string buffer
+    std::vector<BYTE> buffer;
     for (const auto& path : currentList) {
-        totalSize += (path.length() + 1) * sizeof(WCHAR); // Include null terminator
+        const BYTE* strBytes = reinterpret_cast<const BYTE*>(path.c_str());
+        size_t strSize = (path.length() + 1) * sizeof(WCHAR);
+        buffer.insert(buffer.end(), strBytes, strBytes + strSize);
     }
-
-    std::vector<BYTE> buffer(totalSize);
-    ULONG* countPtr = reinterpret_cast<ULONG*>(buffer.data());
-    *countPtr = static_cast<ULONG>(currentList.size());
-
-    WCHAR* pathPtr = reinterpret_cast<WCHAR*>(buffer.data() + sizeof(ULONG));
-    for (const auto& path : currentList) {
-        wcscpy_s(pathPtr, path.length() + 1, path.c_str());
-        pathPtr += path.length() + 1;
-    }
+    // Add final null terminator
+    WCHAR finalNull = L'\0';
+    const BYTE* nullBytes = reinterpret_cast<const BYTE*>(&finalNull);
+    buffer.insert(buffer.end(), nullBytes, nullBytes + sizeof(WCHAR));
 
     bool result = sendIoctl(IOCTL_SET_WHITELIST, buffer.data(), static_cast<DWORD>(buffer.size()));
     
@@ -422,9 +444,9 @@ bool HidHideController::clearWhitelist() {
         return false;
     }
 
-    // Create an empty list
-    ULONG count = 0;
-    bool result = sendIoctl(IOCTL_SET_WHITELIST, &count, sizeof(count));
+    // Create an empty double-null-terminated list (just two nulls)
+    WCHAR emptyList[2] = {L'\0', L'\0'};
+    bool result = sendIoctl(IOCTL_SET_WHITELIST, emptyList, sizeof(emptyList));
     
     if (result) {
         Logger::log("Cleared HidHide whitelist");
@@ -440,16 +462,33 @@ std::vector<std::wstring> HidHideController::getWhitelist() {
         return {};
     }
 
-    // Get the whitelist
-    std::vector<BYTE> sizeBuffer(4096); // Start with 4KB buffer
-    
+    // HidHide whitelist uses double-null-terminated strings (same as blacklist)
+    // Step 1: Call with NULL buffer to get required size
     DWORD bytesReturned = 0;
     BOOL result = DeviceIoControl(
         m_driverHandle,
         IOCTL_GET_WHITELIST,
         nullptr, 0,
-        sizeBuffer.data(), static_cast<DWORD>(sizeBuffer.size()),
+        nullptr, 0,
         &bytesReturned,
+        NULL
+    );
+
+    if (bytesReturned == 0) {
+        // Empty list or error
+        return {};
+    }
+
+    // Step 2: Allocate buffer and get actual data
+    std::vector<BYTE> buffer(bytesReturned);
+    DWORD actualBytes = 0;
+    
+    result = DeviceIoControl(
+        m_driverHandle,
+        IOCTL_GET_WHITELIST,
+        nullptr, 0,
+        buffer.data(), bytesReturned,
+        &actualBytes,
         NULL
     );
 
@@ -458,33 +497,17 @@ std::vector<std::wstring> HidHideController::getWhitelist() {
         return {};
     }
 
-    // Parse the returned data
+    // Parse double-null-terminated wide string list
     std::vector<std::wstring> processes;
-    if (bytesReturned >= sizeof(ULONG)) {
-        ULONG* countPtr = reinterpret_cast<ULONG*>(sizeBuffer.data());
-        ULONG count = *countPtr;
-
-        if (count > 0) {
-            WCHAR* pathPtr = reinterpret_cast<WCHAR*>(sizeBuffer.data() + sizeof(ULONG));
-
-            for (ULONG i = 0; i < count; ++i) {
-                // Find the end of the current string (null terminator)
-                WCHAR* currentPos = pathPtr;
-                
-                // Calculate the length of the string
-                size_t len = 0;
-                while (currentPos[len] != L'\0') {
-                    len++;
-                }
-                
-                // Create the string from the character array
-                std::wstring path(currentPos, len);
-                
-                processes.push_back(path);
-                
-                // Move pointer past the current string and its null terminator
-                pathPtr = currentPos + len + 1;
+    if (actualBytes >= sizeof(WCHAR) * 2) {
+        WCHAR* ptr = reinterpret_cast<WCHAR*>(buffer.data());
+        
+        while (*ptr != L'\0' && (reinterpret_cast<BYTE*>(ptr) - buffer.data()) < actualBytes) {
+            std::wstring processPath = ptr;
+            if (!processPath.empty()) {
+                processes.push_back(processPath);
             }
+            ptr += processPath.length() + 1;
         }
     }
 
@@ -496,8 +519,9 @@ bool HidHideController::setActive(bool active) {
         return false;
     }
 
-    ULONG state = active ? 1 : 0;
-    bool result = sendIoctl(IOCTL_SET_ACTIVE, &state, sizeof(state));
+    // HidHide expects BOOLEAN (1 byte), not ULONG
+    BOOLEAN state = active ? 1 : 0;
+    bool result = sendIoctl(IOCTL_SET_ACTIVE, &state, sizeof(BOOLEAN));
     
     if (result) {
         Logger::log(active ? "HidHide driver activated" : "HidHide driver deactivated");
@@ -513,13 +537,13 @@ bool HidHideController::isActive() {
         return false;
     }
 
-    ULONG state = 0;
+    BOOLEAN state = 0;
     DWORD bytesReturned = 0;
     BOOL result = DeviceIoControl(
         m_driverHandle,
         IOCTL_GET_ACTIVE,
         nullptr, 0,
-        &state, sizeof(state),
+        &state, sizeof(BOOLEAN),  // Must be 1 byte
         &bytesReturned,
         NULL
     );
@@ -537,8 +561,9 @@ bool HidHideController::setInverseMode(bool inverse) {
         return false;
     }
 
-    ULONG state = inverse ? 1 : 0;
-    bool result = sendIoctl(IOCTL_SET_WLINVERSE, &state, sizeof(state));
+    // HidHide expects BOOLEAN (1 byte), not ULONG
+    BOOLEAN state = inverse ? 1 : 0;
+    bool result = sendIoctl(IOCTL_SET_WLINVERSE, &state, sizeof(BOOLEAN));
     
     if (result) {
         Logger::log(inverse ? "HidHide inverse mode enabled" : "HidHide inverse mode disabled");
@@ -554,13 +579,13 @@ bool HidHideController::getInverseMode() {
         return false;
     }
 
-    ULONG state = 0;
+    BOOLEAN state = 0;
     DWORD bytesReturned = 0;
     BOOL result = DeviceIoControl(
         m_driverHandle,
         IOCTL_GET_WLINVERSE,
         nullptr, 0,
-        &state, sizeof(state),
+        &state, sizeof(BOOLEAN),  // Must be 1 byte
         &bytesReturned,
         NULL
     );
